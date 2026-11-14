@@ -10,6 +10,7 @@ interface WeatherEffectsProps {
 
 const DROP_COUNT = 520;
 const MIST_COUNT = 34;
+const FIREFLY_COUNT = 96;
 const _dummy = new THREE.Object3D();
 
 function createMistTexture(): THREE.CanvasTexture {
@@ -34,11 +35,12 @@ function createMistTexture(): THREE.CanvasTexture {
  * Automated environmental weather effects:
  * 1. Instanced rain streaks when weather === 'rainy'
  * 2. Automated low-lying drifting night mist over lake, meadows & vast countryside
- *    whenever timeOfDay === 'night' (amplified if weather === 'foggy')
+ * 3. Sunlit park pollen motes / evening fireflies around parks and canals
  */
 export const WeatherEffects: React.FC<WeatherEffectsProps> = ({ weather, timeOfDay }) => {
   const rainRef = useRef<THREE.InstancedMesh>(null);
   const mistRef = useRef<THREE.InstancedMesh>(null);
+  const fireflyRef = useRef<THREE.InstancedMesh>(null);
   const { camera } = useThree();
 
   const mistTex = useMemo(() => createMistTexture(), []);
@@ -106,6 +108,35 @@ export const WeatherEffects: React.FC<WeatherEffectsProps> = ({ weather, timeOfD
           : 0.15
         : 0;
 
+  const fireflies = useMemo(() => {
+    let seed = 6203;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+    const hubs = [
+      [52, 0],
+      [236, 0],
+      [468, 0],
+      [0, -270],
+      [-510, -455],
+      [755, -455],
+    ];
+    return Array.from({ length: FIREFLY_COUNT }, (_, i) => {
+      const h = hubs[i % hubs.length];
+      return {
+        bx: h[0] + (rand() - 0.5) * 62,
+        by: 1.0 + rand() * 3.8,
+        bz: h[1] + (rand() - 0.5) * 62,
+        phase: rand() * Math.PI * 2,
+        speed: 0.7 + rand() * 0.9,
+      };
+    });
+  }, []);
+
+  const isEvening = timeOfDay === 'night' || timeOfDay === 'sunset';
+  const showFireflies = weather !== 'rainy';
+
   useFrame((state, delta) => {
     const dt = Math.min(delta, 0.05);
 
@@ -141,6 +172,25 @@ export const WeatherEffects: React.FC<WeatherEffectsProps> = ({ weather, timeOfD
       }
       mistRef.current.instanceMatrix.needsUpdate = true;
     }
+
+    if (showFireflies && fireflyRef.current) {
+      const t = state.clock.elapsedTime;
+      for (let i = 0; i < fireflies.length; i++) {
+        const f = fireflies[i];
+        const pulse = 0.65 + 0.35 * Math.sin(t * 2.8 + f.phase);
+        _dummy.position.set(
+          f.bx + Math.sin(t * f.speed + f.phase) * 2.2,
+          f.by + Math.sin(t * 1.4 + f.phase) * 0.65,
+          f.bz + Math.cos(t * f.speed * 0.9 + f.phase) * 2.2,
+        );
+        _dummy.rotation.set(0, 0, 0);
+        const s = isEvening ? 0.14 * pulse : 0.08 * pulse;
+        _dummy.scale.set(s, s, s);
+        _dummy.updateMatrix();
+        fireflyRef.current.setMatrixAt(i, _dummy.matrix);
+      }
+      fireflyRef.current.instanceMatrix.needsUpdate = true;
+    }
   });
 
   return (
@@ -166,6 +216,23 @@ export const WeatherEffects: React.FC<WeatherEffectsProps> = ({ weather, timeOfD
             transparent
             opacity={mistOpacity}
             depthWrite={false}
+          />
+        </instancedMesh>
+      )}
+
+      {showFireflies && (
+        <instancedMesh
+          ref={fireflyRef}
+          args={[undefined, undefined, FIREFLY_COUNT]}
+          frustumCulled={false}
+        >
+          <sphereGeometry args={[1, 6, 6]} />
+          <meshBasicMaterial
+            color={isEvening ? '#fde047' : '#fef3c7'}
+            transparent
+            opacity={isEvening ? 0.85 : 0.42}
+            depthWrite={false}
+            toneMapped={false}
           />
         </instancedMesh>
       )}

@@ -540,7 +540,7 @@ export const INITIAL_TOWN_PLOTS: TownPlot[] = [
     },
     gardenTrees: [
       { x: -6.3, z: 5.5, scale: 0.95, variant: 'cypress' },
-      { x: -5.8, z: -6.0, scale: 1.0, variant: 'ornamental' },
+      { x: 6.4, z: -6.2, scale: 1.0, variant: 'ornamental' },
     ],
     business: null,
     publicBuilding: null,
@@ -783,7 +783,7 @@ export const INITIAL_TOWN_PLOTS: TownPlot[] = [
     },
     gardenTrees: [
       { x: -6.8, z: 5.5, scale: 1.05, variant: 'cypress' },
-      { x: 6.8, z: 5.5, scale: 1.05, variant: 'cypress' },
+      { x: 6.6, z: -6.4, scale: 1.0, variant: 'broadleaf' },
     ],
     business: null,
     publicBuilding: null,
@@ -821,8 +821,8 @@ export const INITIAL_TOWN_PLOTS: TownPlot[] = [
       wallHeight: 6.9,
     },
     gardenTrees: [
-      { x: -6.8, z: -5.8, scale: 1.1, variant: 'broadleaf' },
-      { x: 6.8, z: 5.6, scale: 1.0, variant: 'cypress' },
+      { x: 6.6, z: -6.4, scale: 1.08, variant: 'broadleaf' },
+      { x: -6.6, z: 5.2, scale: 0.98, variant: 'cypress' },
     ],
     business: null,
     publicBuilding: null,
@@ -1424,7 +1424,7 @@ export const INITIAL_TOWN_PLOTS: TownPlot[] = [
     house: null,
     business: null,
     publicBuilding: null,
-    gardenTrees: [{ x: 6.5, z: 6.5, scale: 0.9, variant: 'ornamental' }],
+    gardenTrees: [{ x: -6.5, z: -6.2, scale: 0.9, variant: 'ornamental' }],
   },
 ];
 
@@ -1552,10 +1552,14 @@ export const PEDESTRIAN_LOOPS: PedestrianLoopSpec[] = [
     id: 'ped-park-lake',
     walkSpeed: 1.25,
     waypoints: [
-      { x: 35.5, z: -16.5 },
-      { x: 67.5, z: -16.5 },
-      { x: 67.5, z: -1.0 },
-      { x: 35.5, z: -1.0 },
+      { x: 35.8, z: -1.0 },
+      { x: 48.6, z: -1.0 },
+      { x: 48.6, z: -16.2 },
+      { x: 67.2, z: -16.2 },
+      { x: 67.2, z: -1.0 },
+      { x: 61.2, z: 5.6 },
+      { x: 54.4, z: 5.2 },
+      { x: 48.6, z: 0.2 },
     ],
   },
   // Luxury District Boulevard Stroll

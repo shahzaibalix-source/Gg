@@ -6,7 +6,13 @@ export type HouseArchetype =
   | 'cottage'
   | 'mediterranean'
   | 'luxury-mansion'
-  | 'luxury-modern';
+  | 'luxury-modern'
+  | 'modern-family'
+  | 'suburban-two-storey'
+  | 'contemporary-villa'
+  | 'traditional-home'
+  | 'modern-minimalist'
+  | 'premium-residence';
 
 export type BusinessCategory =
   | 'restaurant'

@@ -4,13 +4,17 @@ export type ResidentTier = 'vip-1' | 'og-50' | 'resident';
 
 export type ExpansionDistrictId =
   | 'og-premium-district'
-  | 'north-west-residential'
-  | 'north-east-residential'
-  | 'south-west-residential'
-  | 'south-east-residential'
+  | 'oakwood-district'
+  | 'riverside-district'
+  | 'greenfield-district'
+  | 'maplewood-district'
+  | 'highland-district'
+  | 'lakeside-district'
+  | 'central-gardens'
   | 'botanical-gardens'
-  | 'waterfront-lake-district'
-  | 'future-expansion-district';
+  | 'waterfront-lake-district';
+
+export type CityPhaseMode = 'phase-1' | 'phase-2' | 'full';
 
 export interface FollowerRecord {
   /** Permanent Resident ID: e.g. RES-0001 .. RES-3447 */
@@ -115,8 +119,45 @@ export interface ExpansionRoadSpec {
   width: number;
   hasDoubleCenterLine: boolean;
   hasDashedCenterLine?: boolean;
-  roadTier?: 'boulevard' | 'collector' | 'residential';
+  roadTier?: 'boulevard' | 'collector' | 'residential' | 'scenic-curve';
   isMainAvenue?: boolean;
+}
+
+export interface CurvedRoadSplineSpec {
+  id: string;
+  name: string;
+  districtId: ExpansionDistrictId;
+  tier: 'collector' | 'residential' | 'scenic-curve';
+  width: number;
+  sidewalkWidth: number;
+  greenStripWidth: number;
+  controlPoints: Array<{ x: number; z: number }>;
+  sampledPoints: Array<{ x: number; z: number }>;
+  hasDoubleCenterLine: boolean;
+  hasDashedCenterLine: boolean;
+  closed?: boolean;
+}
+
+export interface RoundaboutSpec {
+  id: string;
+  name: string;
+  districtId: ExpansionDistrictId;
+  x: number;
+  z: number;
+  innerRadius: number;
+  roadWidth: number;
+  sidewalkWidth: number;
+  hasFountain: boolean;
+}
+
+export interface OgPocketGardenSpec {
+  id: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+  flowerTint: string;
+  hasBench: boolean;
 }
 
 export interface ExpansionCanalSpec {
@@ -146,7 +187,8 @@ export type DistrictParkVariant =
   | 'courtyard-pool'
   | 'orchard-playground'
   | 'lily-pond'
-  | 'valley-meadow';
+  | 'valley-meadow'
+  | 'garden-rotunda';
 
 export interface DistrictParkSpec {
   id: string;
@@ -180,9 +222,11 @@ export interface ExpansionDistrictZone {
   id: ExpansionDistrictId;
   name: string;
   subtitle: string;
+  architecturalTheme?: string;
   color: string;
   center: { x: number; z: number };
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
+  targetCapacity?: number;
 }
 
 export interface ExpansionLandmarkSpec {

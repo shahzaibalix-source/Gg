@@ -9,6 +9,8 @@ interface HouseModelProps {
   textures: CityTextureSet;
   timeOfDay: TimeOfDay;
   doorOpen?: boolean;
+  garageOpen?: boolean;
+  houseNumber?: string;
 }
 
 /**
@@ -21,18 +23,36 @@ export const HouseModel: React.FC<HouseModelProps> = ({
   textures,
   timeOfDay,
   doorOpen = false,
+  garageOpen,
+  houseNumber,
 }) => {
   const doorHingeRef = useRef<THREE.Group>(null);
+  const garageDoorRef = useRef<THREE.Group>(null);
+  const garageProgressRef = useRef(0);
 
   useFrame((_, delta) => {
+    const dt = Math.min(delta, 0.05);
     if (doorHingeRef.current) {
       const targetAngle = doorOpen ? -Math.PI * 0.44 : 0;
       doorHingeRef.current.rotation.y = THREE.MathUtils.damp(
         doorHingeRef.current.rotation.y,
         targetAngle,
         9,
-        Math.min(delta, 0.05),
+        dt,
       );
+    }
+    if (garageDoorRef.current) {
+      const targetGarage = (garageOpen ?? doorOpen) ? 1 : 0;
+      garageProgressRef.current = THREE.MathUtils.damp(
+        garageProgressRef.current,
+        targetGarage,
+        7,
+        dt,
+      );
+      const p = garageProgressRef.current;
+      garageDoorRef.current.position.y = 1.16 + p * 1.12;
+      garageDoorRef.current.position.z = 2.24 - p * 0.96;
+      garageDoorRef.current.rotation.x = -p * (Math.PI * 0.44);
     }
   });
   const {
@@ -54,7 +74,38 @@ export const HouseModel: React.FC<HouseModelProps> = ({
   const isFlatModern = archetype === 'modern-villa' || archetype === 'luxury-modern';
   const isEvening = timeOfDay === 'sunset' || timeOfDay === 'night';
   const windowEmissive = isEvening ? '#ffbe6b' : '#2a3744';
-  const windowEmissiveIntensity = isEvening ? 1.25 : 0.08;
+  const windowEmissiveIntensity = isEvening ? 1.45 : 0.06;
+
+  // Crisp architectural house number plaque texture (disposed on change/unmount)
+  const houseNumTexture = useMemo(() => {
+    if (!houseNumber || typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#1f2937';
+      ctx.fillRect(0, 0, 128, 64);
+      ctx.strokeStyle = '#d4af37';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(3, 3, 122, 58);
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(houseNumber.slice(0, 7), 64, 33);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }, [houseNumber]);
+
+  React.useEffect(() => {
+    return () => {
+      houseNumTexture?.dispose();
+    };
+  }, [houseNumTexture]);
 
   const wallMap = useMemo(() => {
     if (archetype === 'townhouse') return textures.brick;
@@ -447,16 +498,60 @@ export const HouseModel: React.FC<HouseModelProps> = ({
           <meshStandardMaterial color={trimColor} roughness={0.68} />
         </mesh>
 
-        {/* Porch Lantern */}
-        <group position={[0.92, 2.05, 0.16]}>
-          <mesh>
-            <boxGeometry args={[0.16, 0.24, 0.16]} />
-            <meshStandardMaterial
-              color="#ffe5a3"
-              emissive="#ffaa3b"
-              emissiveIntensity={isEvening ? 2.4 : 0.15}
-              roughness={0.2}
-            />
+        {/* Twin Porch Wall Sconces */}
+        {[-0.92, 0.92].map((sx, idx) => (
+          <group key={`sconce-${idx}`} position={[sx, 2.02, 0.14]}>
+            <mesh position={[0, 0.04, -0.04]}>
+              <boxGeometry args={[0.12, 0.18, 0.08]} />
+              <meshStandardMaterial color="#1e242b" roughness={0.4} metalness={0.7} />
+            </mesh>
+            <mesh>
+              <boxGeometry args={[0.15, 0.22, 0.14]} />
+              <meshStandardMaterial
+                color="#ffe5a3"
+                emissive="#ffaa3b"
+                emissiveIntensity={isEvening ? 2.5 : 0.15}
+                roughness={0.2}
+              />
+            </mesh>
+          </group>
+        ))}
+
+        {/* House Number Plaque beside Entrance */}
+        {houseNumTexture && (
+          <mesh position={[-0.96, 1.56, 0.07]}>
+            <boxGeometry args={[0.38, 0.2, 0.04]} />
+            <meshStandardMaterial map={houseNumTexture} roughness={0.35} metalness={0.25} />
+          </mesh>
+        )}
+
+        {/* Terracotta Flower Pots flanking Front Steps */}
+        {[-1.24, 1.24].map((px, idx) => (
+          <group key={`pot-${idx}`} position={[px, -plinthH, 0.56]}>
+            <mesh position={[0, 0.2, 0]} castShadow>
+              <cylinderGeometry args={[0.2, 0.14, 0.4, 10]} />
+              <meshStandardMaterial color="#b45b38" roughness={0.85} />
+            </mesh>
+            <mesh position={[0, 0.46, 0]} castShadow>
+              <dodecahedronGeometry args={[0.22, 0]} />
+              <meshStandardMaterial color="#3b7236" roughness={0.88} />
+            </mesh>
+            <mesh position={[0, 0.58, 0]}>
+              <sphereGeometry args={[0.09, 6, 6]} />
+              <meshStandardMaterial color={idx === 0 ? '#f43f5e' : '#fbbf24'} roughness={0.75} />
+            </mesh>
+          </group>
+        ))}
+
+        {/* Roadside Residential Mailbox Post near Entry Walkway */}
+        <group position={[-1.68, -plinthH, 1.38]}>
+          <mesh position={[0, 0.52, 0]} castShadow>
+            <cylinderGeometry args={[0.045, 0.055, 1.04, 8]} />
+            <meshStandardMaterial color="#272c33" roughness={0.45} metalness={0.65} />
+          </mesh>
+          <mesh position={[0, 1.08, 0.04]} castShadow>
+            <boxGeometry args={[0.26, 0.22, 0.42]} />
+            <meshStandardMaterial color={trimColor} roughness={0.42} metalness={0.45} />
           </mesh>
         </group>
       </group>
@@ -598,29 +693,95 @@ export const HouseModel: React.FC<HouseModelProps> = ({
         </group>
       )}
 
-      {/* 10. Modern Timber Carport / Pergola Wing */}
+      {/* 10. Complete Enclosed Attached Garage Wing + Animated Sectional Door */}
       {hasGarageCarport && (
-        <group position={[width / 2 + 1.6, 0, 0.4]}>
-          <mesh position={[0, 2.65, 0]} castShadow receiveShadow>
-            <boxGeometry args={[3.2, 0.16, 4.6]} />
-            <meshStandardMaterial color={trimColor} roughness={0.55} metalness={0.2} />
+        <group position={[width / 2 + 1.45, 0, -0.15]}>
+          {/* Garage Stone Plinth */}
+          <mesh position={[0, plinthH / 2, 0]} castShadow receiveShadow>
+            <boxGeometry args={[3.04, plinthH, 4.74]} />
+            <meshStandardMaterial color="#7d7870" roughness={0.92} metalness={0.02} />
           </mesh>
-          {/* Timber louvers */}
-          {[-1.7, -1.1, -0.5, 0.1, 0.7, 1.3, 1.9].map((lz, i) => (
-            <mesh key={i} position={[0, 2.55, lz]} castShadow>
-              <boxGeometry args={[2.95, 0.08, 0.12]} />
-              <meshStandardMaterial color={accentColor} roughness={0.7} />
+
+          {/* Outer Side Wall */}
+          <mesh position={[1.38, plinthH + 1.36, 0]} castShadow receiveShadow>
+            <boxGeometry args={[0.18, 2.72, 4.6]} />
+            <meshStandardMaterial map={wallMap} color={wallColor} roughness={0.84} />
+          </mesh>
+          {/* Rear Garage Wall */}
+          <mesh position={[0, plinthH + 1.36, -2.21]} castShadow receiveShadow>
+            <boxGeometry args={[2.9, 2.72, 0.18]} />
+            <meshStandardMaterial map={wallMap} color={wallColor} roughness={0.84} />
+          </mesh>
+          {/* Left Front Pilaster, Right Front Pilaster & Header Lintel framing the 2.34m bay */}
+          <mesh position={[-1.31, plinthH + 1.12, 2.21]} castShadow receiveShadow>
+            <boxGeometry args={[0.28, 2.24, 0.18]} />
+            <meshStandardMaterial map={wallMap} color={wallColor} roughness={0.84} />
+          </mesh>
+          <mesh position={[1.31, plinthH + 1.12, 2.21]} castShadow receiveShadow>
+            <boxGeometry args={[0.28, 2.24, 0.18]} />
+            <meshStandardMaterial map={wallMap} color={wallColor} roughness={0.84} />
+          </mesh>
+          <mesh position={[0, plinthH + 2.48, 2.21]} castShadow receiveShadow>
+            <boxGeometry args={[2.9, 0.48, 0.2]} />
+            <meshStandardMaterial color={trimColor} roughness={0.62} />
+          </mesh>
+
+          {/* Garage Dark Recessed Interior Backing (visible when door lifts) */}
+          <mesh position={[0, plinthH + 1.12, 0.1]}>
+            <boxGeometry args={[2.46, 2.24, 4.1]} />
+            <meshStandardMaterial
+              color="#1b1f25"
+              emissive="#ffca7a"
+              emissiveIntensity={garageOpen ?? doorOpen ? 0.28 : 0.02}
+              roughness={0.9}
+            />
+          </mesh>
+
+          {/* Garage Roof Cornice & Pitched/Flat Cap matching house style */}
+          <mesh position={[0, plinthH + 2.78, 0.04]} castShadow receiveShadow>
+            <boxGeometry args={[3.16, 0.16, 4.92]} />
+            <meshStandardMaterial color={trimColor} roughness={0.58} metalness={0.14} />
+          </mesh>
+          <mesh position={[0, plinthH + 2.94, 0.04]} castShadow receiveShadow>
+            <boxGeometry args={[3.04, 0.18, 4.78]} />
+            <meshStandardMaterial map={roofMap} color={roofColor} roughness={0.76} />
+          </mesh>
+
+          {/* Small Side Frost Window on Garage */}
+          <mesh position={[1.48, plinthH + 1.72, 0]}>
+            <boxGeometry args={[0.06, 0.65, 1.1]} />
+            <meshStandardMaterial
+              color="#9bb6c7"
+              emissive={windowEmissive}
+              emissiveIntensity={windowEmissiveIntensity * 0.7}
+              roughness={0.15}
+            />
+          </mesh>
+
+          {/* Warm Exterior Coach Light flanking Garage Bay */}
+          <mesh position={[-1.31, plinthH + 1.88, 2.34]}>
+            <boxGeometry args={[0.14, 0.2, 0.12]} />
+            <meshStandardMaterial
+              color="#ffe5a3"
+              emissive="#ffaa3b"
+              emissiveIntensity={isEvening ? 2.3 : 0.15}
+              roughness={0.2}
+            />
+          </mesh>
+
+          {/* Animated Sectional Overhead Garage Door */}
+          <group ref={garageDoorRef} position={[0, 1.16, 2.24]}>
+            <mesh castShadow receiveShadow>
+              <boxGeometry args={[2.32, 2.12, 0.08]} />
+              <meshStandardMaterial color={trimColor} roughness={0.48} metalness={0.16} />
             </mesh>
-          ))}
-          {/* Steel support columns */}
-          <mesh position={[1.42, 1.3, 2.1]} castShadow>
-            <boxGeometry args={[0.14, 2.6, 0.14]} />
-            <meshStandardMaterial color={trimColor} roughness={0.4} metalness={0.5} />
-          </mesh>
-          <mesh position={[1.42, 1.3, -2.1]} castShadow>
-            <boxGeometry args={[0.14, 2.6, 0.14]} />
-            <meshStandardMaterial color={trimColor} roughness={0.4} metalness={0.5} />
-          </mesh>
+            {[-0.68, -0.22, 0.24, 0.7].map((ry, idx) => (
+              <mesh key={`grib-${idx}`} position={[0, ry, 0.048]}>
+                <boxGeometry args={[2.16, 0.04, 0.02]} />
+                <meshStandardMaterial color={accentColor} roughness={0.55} />
+              </mesh>
+            ))}
+          </group>
         </group>
       )}
 
@@ -680,15 +841,18 @@ const WindowAssembly: React.FC<WindowAssemblyProps> = ({
         <boxGeometry args={[width + 0.14, height + 0.14, 0.1]} />
         <meshStandardMaterial color={frameColor} roughness={0.58} />
       </mesh>
-      {/* Reflective Glass Pane */}
+      {/* Reflective Clearcoat Glass Pane */}
       <mesh position={[0, 0, 0.035]}>
         <boxGeometry args={[width - 0.08, height - 0.08, 0.05]} />
-        <meshStandardMaterial
+        <meshPhysicalMaterial
           color="#6d8ea3"
           emissive={emissive}
           emissiveIntensity={emissiveIntensity}
-          roughness={0.08}
-          metalness={0.35}
+          roughness={0.07}
+          metalness={0.38}
+          clearcoat={0.92}
+          clearcoatRoughness={0.08}
+          envMapIntensity={1.45}
         />
       </mesh>
       {/* Mullion Crossbars */}

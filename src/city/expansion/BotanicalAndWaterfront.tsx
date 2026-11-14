@@ -5,6 +5,19 @@ import { TimeOfDay } from '../types';
 import { SIDEWALK_HEIGHT } from '../world/MasterTownBlueprint';
 import { ParkBench, ParkFountain, StylizedTree } from '../assets/FoliageAndProps';
 import {
+  GrandCommunityFountain,
+  ParkFlowerbed,
+  ParkInfoBoard,
+  ParkLampPost,
+  ParkLitterBin,
+  ParkPicnicSet,
+  ParkPlanterPot,
+  ParkStoneBollard,
+  PlaygroundAlpha,
+  PlaygroundBeta,
+  WindingStonePathway,
+} from '../assets/CommunityParkProps';
+import {
   AnimatedWaterPlane,
   InstancedGrassField,
   VenetianGondola,
@@ -24,6 +37,54 @@ export const BotanicalAndWaterfront: React.FC<BotanicalAndWaterfrontProps> = ({ 
   const boatBRef = useRef<THREE.Group>(null);
   const isEvening = timeOfDay === 'sunset' || timeOfDay === 'night';
 
+  const westLoopPath: Array<[number, number]> = useMemo(
+    () => [
+      [-64, -3.5],
+      [-56, -15],
+      [-44, -18],
+      [-26, -24],
+      [-12, -32],
+      [-3.5, -34],
+    ],
+    [],
+  );
+
+  const westSouthPath: Array<[number, number]> = useMemo(
+    () => [
+      [-64, 3.5],
+      [-58, 14],
+      [-44, 17],
+      [-25, 28],
+      [-10, 34],
+      [-3.5, 34],
+    ],
+    [],
+  );
+
+  const eastLoopPath: Array<[number, number]> = useMemo(
+    () => [
+      [64, -3.5],
+      [56, -15],
+      [44, -18],
+      [26, -24],
+      [12, -32],
+      [3.5, -34],
+    ],
+    [],
+  );
+
+  const eastSouthPath: Array<[number, number]> = useMemo(
+    () => [
+      [64, 3.5],
+      [58, 14],
+      [44, 17],
+      [25, 28],
+      [10, 34],
+      [3.5, 34],
+    ],
+    [],
+  );
+
   const botanicalGrass = useMemo(
     () =>
       generateParkGrassTufts({
@@ -32,13 +93,18 @@ export const BotanicalAndWaterfront: React.FC<BotanicalAndWaterfrontProps> = ({ 
         y: SIDEWALK_HEIGHT + 0.02,
         width: 156,
         depth: 230,
-        count: 640,
+        count: 680,
         seed: 2360,
         excludeFn: (lx, lz) => {
-          // Exclude main cross paths and conservatory footprint
+          // Exclude main cross paths, fountain plaza, and conservatory footprint
           if (Math.abs(lx) < 5.2 || Math.abs(lz) < 5.2) return true;
           if (Math.hypot(lx, lz) < 22) return true;
+          if (Math.hypot(lx, lz - 34) < 7.8) return true;
           if (Math.abs(lz) < 8 && Math.abs(lx) < 33) return true;
+          // Exclude Playground A (-44, 24) & Playground B (44, 24)
+          if (Math.abs(Math.abs(lx) - 44) < 7.8 && Math.abs(lz - 24) < 6.8) return true;
+          // Exclude Picnic Groves (-44, -24) & (44, -24)
+          if (Math.abs(Math.abs(lx) - 44) < 7.2 && Math.abs(lz + 24) < 5.5) return true;
           // Exclude floral parterres
           if (
             Math.abs(Math.abs(lx) - 38) < 16 &&
@@ -105,6 +171,23 @@ export const BotanicalAndWaterfront: React.FC<BotanicalAndWaterfrontProps> = ({ 
           <meshStandardMaterial color="#d8cfb8" roughness={0.9} polygonOffset polygonOffsetFactor={-1} />
         </mesh>
 
+        {/* Winding Curved Stone Pedestrian Trails Linking Lawns, Fountain & Playgrounds */}
+        <WindingStonePathway points={westLoopPath} width={2.4} y={SIDEWALK_HEIGHT + 0.03} />
+        <WindingStonePathway points={westSouthPath} width={2.4} y={SIDEWALK_HEIGHT + 0.03} />
+        <WindingStonePathway points={eastLoopPath} width={2.4} y={SIDEWALK_HEIGHT + 0.03} />
+        <WindingStonePathway points={eastSouthPath} width={2.4} y={SIDEWALK_HEIGHT + 0.03} />
+
+        {/* Grand Circular Fountain Plaza on South Promenade (local 0, 34) */}
+        <mesh position={[0, SIDEWALK_HEIGHT + 0.032, 34]} receiveShadow>
+          <cylinderGeometry args={[7.4, 7.5, 0.035, 32]} />
+          <meshStandardMaterial color="#dcd4c3" roughness={0.85} polygonOffset polygonOffsetFactor={-2} />
+        </mesh>
+        <GrandCommunityFountain
+          position={[0, SIDEWALK_HEIGHT + 0.04, 34]}
+          scale={1.06}
+          timeOfDay={timeOfDay}
+        />
+
         {/* Grand Victorian Botanical Conservatory Dome (Center) */}
         <group position={[0, SIDEWALK_HEIGHT + 0.03, 0]}>
           <mesh position={[0, 0.4, 0]} receiveShadow>
@@ -159,6 +242,30 @@ export const BotanicalAndWaterfront: React.FC<BotanicalAndWaterfrontProps> = ({ 
           ))}
         </group>
 
+        {/* PLAYGROUND ALPHA — South-West Open Lawn (-44, 24) */}
+        <PlaygroundAlpha position={[-44, SIDEWALK_HEIGHT + 0.02, 24]} scale={1.32} />
+
+        {/* PLAYGROUND BETA — South-East Open Lawn (+44, 24) */}
+        <PlaygroundBeta position={[44, SIDEWALK_HEIGHT + 0.02, 24]} scale={1.32} />
+
+        {/* TWO SHADED PICNIC & FAMILY SOCIAL GROVES — North Lawns (-44, -24 & +44, -24) */}
+        {[-44, 44].map((gx) => (
+          <group key={`picnic-grove-${gx}`} position={[gx, SIDEWALK_HEIGHT + 0.02, -24]}>
+            <mesh position={[0, 0.014, 0]} receiveShadow>
+              <boxGeometry args={[12.8, 0.028, 9.2]} />
+              <meshStandardMaterial color="#ddd4c2" roughness={0.86} />
+            </mesh>
+            <ParkPicnicSet position={[-3.0, 0.02, 0]} umbrellaColor={gx < 0 ? '#b91c1c' : '#0f766e'} />
+            <ParkPicnicSet
+              position={[3.0, 0.02, 0]}
+              rotationY={Math.PI / 8}
+              umbrellaColor={gx < 0 ? '#1d4ed8' : '#d97706'}
+            />
+            <ParkLitterBin position={[5.6, 0.02, 3.6]} />
+            <ParkFlowerbed position={[0, 0.02, -3.6]} width={4.2} depth={1.4} />
+          </group>
+        ))}
+
         {/* Eight Symmetrical Floral Parterres */}
         {[
           [-38, -56, '#f472b6'],
@@ -186,6 +293,62 @@ export const BotanicalAndWaterfront: React.FC<BotanicalAndWaterfrontProps> = ({ 
           </group>
         ))}
 
+        {/* Decorative Park Flowerbeds, Planter Pots & Map Information Boards */}
+        <ParkFlowerbed position={[-9.5, SIDEWALK_HEIGHT, 34]} circular width={2.8} depth={2.8} />
+        <ParkFlowerbed position={[9.5, SIDEWALK_HEIGHT, 34]} circular width={2.8} depth={2.8} />
+        <ParkFlowerbed position={[-14, SIDEWALK_HEIGHT, 24]} width={3.6} depth={1.5} />
+        <ParkFlowerbed position={[14, SIDEWALK_HEIGHT, 24]} width={3.6} depth={1.5} />
+        <ParkFlowerbed position={[-14, SIDEWALK_HEIGHT, -24]} width={3.6} depth={1.5} />
+        <ParkFlowerbed position={[14, SIDEWALK_HEIGHT, -24]} width={3.6} depth={1.5} />
+
+        <ParkInfoBoard position={[-6.4, SIDEWALK_HEIGHT + 0.02, -26]} rotationY={Math.PI / 4} title="BOTANICAL PARK MAP" />
+        <ParkInfoBoard position={[6.4, SIDEWALK_HEIGHT + 0.02, 26]} rotationY={-Math.PI * 0.75} title="GRAND CENTRAL PARK" />
+
+        <ParkPlanterPot position={[-4.8, SIDEWALK_HEIGHT + 0.02, 28.5]} flowerVariant="pink" />
+        <ParkPlanterPot position={[4.8, SIDEWALK_HEIGHT + 0.02, 28.5]} flowerVariant="gold" />
+        <ParkPlanterPot position={[-4.8, SIDEWALK_HEIGHT + 0.02, 39.5]} flowerVariant="violet" />
+        <ParkPlanterPot position={[4.8, SIDEWALK_HEIGHT + 0.02, 39.5]} flowerVariant="coral" />
+
+        {/* Classic Park Globe Lamp Posts Illuminating at Sunset & Night */}
+        {[
+          [-5.0, -46],
+          [5.0, -46],
+          [-5.0, -76],
+          [5.0, -76],
+          [-5.0, 46],
+          [5.0, 46],
+          [-5.0, 76],
+          [5.0, 76],
+          [-58, -5.0],
+          [58, -5.0],
+          [-34, 16],
+          [34, 16],
+        ].map(([lx, lz], li) => (
+          <ParkLampPost key={`bot-lamp-${li}`} position={[lx, SIDEWALK_HEIGHT, lz]} timeOfDay={timeOfDay} />
+        ))}
+
+        {/* Litter Bins & Entrance Bollards */}
+        {[
+          [-36.5, 24],
+          [36.5, 24],
+          [-6.6, 30.5],
+          [6.6, 37.5],
+        ].map(([bx, bz], bi) => (
+          <ParkLitterBin key={`bot-bin-${bi}`} position={[bx, SIDEWALK_HEIGHT + 0.02, bz]} />
+        ))}
+        {[
+          [-78, -4.4],
+          [-78, 4.4],
+          [78, -4.4],
+          [78, 4.4],
+          [-4.4, -114],
+          [4.4, -114],
+          [-4.4, 114],
+          [4.4, 114],
+        ].map(([bx, bz], bi) => (
+          <ParkStoneBollard key={`bot-bol-${bi}`} position={[bx, SIDEWALK_HEIGHT, bz]} timeOfDay={timeOfDay} />
+        ))}
+
         {/* Wind-Swaying 3D Grass Tufts Across Botanical Lawns */}
         <InstancedGrassField tufts={botanicalGrass} />
 
@@ -193,10 +356,12 @@ export const BotanicalAndWaterfront: React.FC<BotanicalAndWaterfrontProps> = ({ 
         {[
           [-6.2, -36, Math.PI / 2],
           [6.2, -36, -Math.PI / 2],
-          [-6.2, 36, Math.PI / 2],
-          [6.2, 36, -Math.PI / 2],
+          [-6.2, 34, Math.PI / 2],
+          [6.2, 34, -Math.PI / 2],
           [-56, -6.2, 0],
           [56, -6.2, 0],
+          [-36.2, 24, -Math.PI / 2],
+          [36.2, 24, Math.PI / 2],
         ].map(([bx, bz, rot], bi) => (
           <ParkBench key={bi} position={[bx, SIDEWALK_HEIGHT + 0.03, bz]} rotationY={rot} />
         ))}
@@ -206,12 +371,18 @@ export const BotanicalAndWaterfront: React.FC<BotanicalAndWaterfrontProps> = ({ 
           [-68, 108, 'broadleaf', 1.22],
           [68, 108, 'broadleaf', 1.25],
           [-68, -22, 'cypress', 1.15],
-          [68, 22, 'cypress', 1.15],
+          [68, -22, 'cypress', 1.15],
+          [-68, 22, 'ornamental', 1.12],
+          [68, 22, 'ornamental', 1.12],
+          [-22, -74, 'broadleaf', 1.18],
+          [22, -74, 'broadleaf', 1.18],
+          [-22, 74, 'ornamental', 1.14],
+          [22, 74, 'ornamental', 1.14],
         ].map(([tx, tz, variant, sc], ti) => (
           <StylizedTree
             key={ti}
             position={[tx as number, SIDEWALK_HEIGHT + 0.02, tz as number]}
-            variant={variant as 'broadleaf' | 'cypress'}
+            variant={variant as 'broadleaf' | 'cypress' | 'ornamental'}
             scale={sc as number}
           />
         ))}
@@ -278,36 +449,88 @@ export const BotanicalAndWaterfront: React.FC<BotanicalAndWaterfrontProps> = ({ 
           </group>
         ))}
 
-        {/* Arched Footbridges Linking Boardwalk -> Central Garden Island -> East Quay (Z = 0) */}
-        <group position={[-39.5, SIDEWALK_HEIGHT + 0.34, 0]}>
-          <mesh receiveShadow castShadow>
-            <boxGeometry args={[80, 0.28, 5.4]} />
-            <meshStandardMaterial color="#8f6845" roughness={0.82} />
-          </mesh>
-          <mesh position={[0, 0.56, -2.5]}>
-            <boxGeometry args={[79, 0.72, 0.18]} />
-            <meshStandardMaterial color="#5b412c" roughness={0.84} />
-          </mesh>
-          <mesh position={[0, 0.56, 2.5]}>
-            <boxGeometry args={[79, 0.72, 0.18]} />
-            <meshStandardMaterial color="#5b412c" roughness={0.84} />
-          </mesh>
-        </group>
+        {/* Twin Grand Red Steel Arch/Truss Bridges Linking Boardwalk -> Central Island -> East Quay */}
+        {[
+          { cx: -39.5, len: 80 },
+          { cx: 69.5, len: 52 },
+        ].map((span, sIdx) => {
+          const halfSpan = span.len / 2;
+          const archR = halfSpan - 2.0;
+          const archScaleY = sIdx === 0 ? 0.24 : 0.32;
+          const postCount = sIdx === 0 ? 9 : 7;
+          const postOffsets: number[] = [];
+          for (let i = 1; i < postCount; i++) {
+            postOffsets.push(-archR + (i / postCount) * (archR * 2));
+          }
+          const isNight = timeOfDay === 'night' || timeOfDay === 'sunset';
+          return (
+            <group key={`red-lake-bridge-${sIdx}`} position={[span.cx, SIDEWALK_HEIGHT + 0.34, 0]}>
+              {/* Heavy Timber & Steel Deck */}
+              <mesh receiveShadow castShadow>
+                <boxGeometry args={[span.len, 0.28, 5.4]} />
+                <meshStandardMaterial color="#8f6845" roughness={0.82} />
+              </mesh>
+              {/* Twin Red Steel Arch Truss Sides */}
+              {[-2.55, 2.55].map((rz, ri) => (
+                <group key={`rb-side-${ri}`} position={[0, 0.14, rz]}>
+                  {/* Red Steel Lower & Handrail Chords */}
+                  <mesh position={[0, 0.22, 0]} castShadow>
+                    <boxGeometry args={[span.len - 0.6, 0.22, 0.22]} />
+                    <meshStandardMaterial color="#b91c1c" roughness={0.36} metalness={0.62} />
+                  </mesh>
+                  <mesh position={[0, 0.88, 0]} castShadow>
+                    <boxGeometry args={[span.len - 0.6, 0.12, 0.18]} />
+                    <meshStandardMaterial color="#dc2626" roughness={0.34} metalness={0.64} />
+                  </mesh>
+                  {/* Sweeping Red Parabolic Arch Rib */}
+                  <mesh position={[0, 0, 0]} scale={[1, archScaleY, 1]} castShadow>
+                    <torusGeometry args={[archR, 0.22, 8, 28, Math.PI]} />
+                    <meshStandardMaterial color="#b91c1c" roughness={0.32} metalness={0.66} />
+                  </mesh>
+                  {/* Vertical Red Steel Suspender Struts */}
+                  {postOffsets.map((px, pi) => {
+                    const h = Math.sqrt(Math.max(0, archR * archR - px * px)) * archScaleY;
+                    return (
+                      <mesh key={`rs-${pi}`} position={[px, h / 2 + 0.1, 0]} castShadow>
+                        <boxGeometry args={[0.14, Math.max(0.8, h), 0.14]} />
+                        <meshStandardMaterial color="#991b1b" roughness={0.38} metalness={0.62} />
+                      </mesh>
+                    );
+                  })}
+                  {/* Corner Steel Pylons with Warm Lantern Globes */}
+                  {[-halfSpan + 1.4, halfSpan - 1.4].map((lx, li) => (
+                    <group key={`bl-${li}`} position={[lx, 1.35, 0]}>
+                      <mesh castShadow>
+                        <boxGeometry args={[0.32, 1.35, 0.32]} />
+                        <meshStandardMaterial color="#7f1d1d" roughness={0.42} metalness={0.65} />
+                      </mesh>
+                      <mesh position={[0, 0.82, 0]}>
+                        <sphereGeometry args={[0.24, 10, 10]} />
+                        <meshStandardMaterial
+                          color="#fff3d1"
+                          emissive="#ffae34"
+                          emissiveIntensity={isNight ? 2.4 : 0.25}
+                          roughness={0.2}
+                        />
+                      </mesh>
+                    </group>
+                  ))}
+                </group>
+              ))}
 
-        <group position={[69.5, SIDEWALK_HEIGHT + 0.34, 0]}>
-          <mesh receiveShadow castShadow>
-            <boxGeometry args={[52, 0.28, 5.4]} />
-            <meshStandardMaterial color="#8f6845" roughness={0.82} />
-          </mesh>
-          <mesh position={[0, 0.56, -2.5]}>
-            <boxGeometry args={[51, 0.72, 0.18]} />
-            <meshStandardMaterial color="#5b412c" roughness={0.84} />
-          </mesh>
-          <mesh position={[0, 0.56, 2.5]}>
-            <boxGeometry args={[51, 0.72, 0.18]} />
-            <meshStandardMaterial color="#5b412c" roughness={0.84} />
-          </mesh>
-        </group>
+              {/* Overhead Cross-Portal Portal Bracing between Twin Arches */}
+              {[-archR * 0.48, -archR * 0.24, 0, archR * 0.24, archR * 0.48].map((bx, bi) => {
+                const bh = 0.14 + Math.sqrt(Math.max(0, archR * archR - bx * bx)) * archScaleY;
+                return (
+                  <mesh key={`xtie-${bi}`} position={[bx, bh, 0]} castShadow>
+                    <boxGeometry args={[0.22, 0.22, 5.3]} />
+                    <meshStandardMaterial color="#b91c1c" roughness={0.35} metalness={0.64} />
+                  </mesh>
+                );
+              })}
+            </group>
+          );
+        })}
 
         {/* Central Scenic Garden Island Inside Grand Lake (local X = 22, world X = 468) */}
         <group position={[22, 0, 0]}>

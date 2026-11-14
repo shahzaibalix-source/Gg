@@ -34,9 +34,12 @@ import { SpatialBirdAudioController } from './audio/SpatialBirdAudioController';
 import { ExpansionCityWorld } from './expansion/ExpansionMasterPlan';
 import { ExpansionPlotSpec } from './expansion/types';
 import { ExpandedCityRenderer } from './expansion/ExpandedCityRenderer';
+import { HouseOwnerLabels } from './ui/HouseOwnerLabels';
+import type { MasterCityMap } from './planning/types';
 
 interface CitySceneProps {
   plots: TownPlot[];
+  masterPlan?: MasterCityMap | null;
   expansionWorld?: ExpansionCityWorld | null;
   cameraMode: CameraMode;
   cinematicTour: CinematicTourId;
@@ -317,6 +320,7 @@ const CityWorldContent: React.FC<
   CitySceneProps & { isSoftwareGl: boolean; isMobileGpu: boolean }
 > = ({
   plots,
+  masterPlan,
   expansionWorld,
   cameraMode,
   cinematicTour,
@@ -363,7 +367,7 @@ const CityWorldContent: React.FC<
         isSoftwareGl={isSoftwareGl}
         isMobileGpu={isMobileGpu}
       />
-      <NightStreetLights timeOfDay={timeOfDay} isSoftwareGl={isSoftwareGl} />
+      <NightStreetLights timeOfDay={timeOfDay} isSoftwareGl={isSoftwareGl} masterPlan={masterPlan} />
       <WindTimeUpdater />
       <CityCameraController
         cameraMode={cameraMode}
@@ -385,9 +389,10 @@ const CityWorldContent: React.FC<
         onTriggerPrimaryAction={onTriggerPrimaryAction}
       />
 
-      <RoadAndSidewalkSystem textures={textures} timeOfDay={timeOfDay} />
+      <RoadAndSidewalkSystem textures={textures} timeOfDay={timeOfDay} masterPlan={masterPlan} />
       <CentralPark
         textures={textures}
+        timeOfDay={timeOfDay}
         activeBenchId={sittingBenchId}
         onSelectBench={onSelectBench}
       />
@@ -422,6 +427,12 @@ const CityWorldContent: React.FC<
         timeOfDay={timeOfDay}
         weather={weather}
         enabled={birdAudioEnabled}
+      />
+      <HouseOwnerLabels
+        plots={plots}
+        expansionWorld={expansionWorld}
+        cameraMode={cameraMode}
+        playerPoseRef={playerPoseRef}
       />
     </>
   );

@@ -12,6 +12,7 @@ import {
   ExpansionPlotSpec,
   ExpansionRoadSpec,
   FollowerRecord,
+  OgPocketGardenSpec,
 } from './types';
 
 export interface ExpansionSpatialIndex {
@@ -27,6 +28,8 @@ export interface ExpansionCityWorld {
   vipPlot: ExpansionPlotSpec | null;
   monumentPosition: { x: number; z: number };
   roads: ExpansionRoadSpec[];
+  curvyRoadSegments: ExpansionRoadSpec[];
+  ogPocketGardens: OgPocketGardenSpec[];
   canals: ExpansionCanalSpec[];
   bridges: ExpansionBridgeSpec[];
   districtParks: DistrictParkSpec[];
@@ -450,8 +453,17 @@ const RESERVED_ZONES: BoxRect[] = [
   // Venice Canals (protect clear waterways from any residential plots)
   { minX: -288, maxX: -252, minZ: -760, maxZ: 760 },
   { minX: 566, maxX: 602, minZ: -760, maxZ: 760 },
-  { minX: -1020, maxX: 1020, minZ: -372, maxZ: -334 },
-  { minX: -1020, maxX: 602, minZ: 136, maxZ: 172 },
+  { minX: -1020, maxX: 1020, minZ: -372, maxZ: -322 },
+  { minX: -1020, maxX: 602, minZ: 136, maxZ: 185 },
+  // Primary Named Boulevards & Sidewalk Corridors (prevent any block/plot overlap)
+  { minX: -840, maxX: 890, minZ: -139, maxZ: -121 },
+  { minX: -840, maxX: 890, minZ: 121, maxZ: 139 },
+  { minX: -840, maxX: 890, minZ: 167, maxZ: 185 },
+  { minX: -149, maxX: -131, minZ: -640, maxZ: 680 },
+  { minX: 136, maxX: 154, minZ: -340, maxZ: 680 },
+  { minX: 317, maxX: 335, minZ: -640, maxZ: 680 },
+  { minX: 555, maxX: 573, minZ: -640, maxZ: 680 },
+  { minX: -301, maxX: -283, minZ: -640, maxZ: 680 },
   // Dedicated Neighborhood District Parks (zero houses placed inside)
   ...DISTRICT_PARKS.map((pk) => ({
     minX: pk.x - pk.width / 2 - 4,
@@ -719,26 +731,91 @@ export function buildExpansionCityWorld(residents: FollowerRecord[]): ExpansionC
     },
   );
 
-  // Curved Outer Scenic Panorama Ring Boulevard (28 smooth overlapping arc segments!)
-  const ringSegs = 28;
-  const rx = 1085;
-  const rz = 815;
+  // Curved Outer Scenic Panorama Ring Boulevard (36 smooth overlapping arc segments!)
+  const curvyRoadSegments: ExpansionRoadSpec[] = [];
+  const ringSegs = 36;
+  const rx = 1175;
+  const rz = 890;
   for (let i = 0; i < ringSegs; i++) {
     const a1 = (i / ringSegs) * Math.PI * 2;
     const a2 = ((i + 1) / ringSegs) * Math.PI * 2;
-    roads.push({
+    const seg: ExpansionRoadSpec = {
       id: `exp-scenic-ring-${i}`,
       name: 'Grand Panoramic Ring Boulevard',
       x1: Math.cos(a1) * rx,
       z1: Math.sin(a1) * rz,
       x2: Math.cos(a2) * rx,
       z2: Math.sin(a2) * rz,
-      width: 11.2,
+      width: 11.4,
       hasDoubleCenterLine: true,
-      roadTier: 'boulevard',
+      roadTier: 'scenic-curve',
       isMainAvenue: true,
-    });
+    };
+    roads.push(seg);
+    curvyRoadSegments.push(seg);
   }
+
+  // Smooth Curvy Scenic Connector Parkways winding cleanly outside residential blocks
+  const addCurvyParkway = (
+    prefix: string,
+    name: string,
+    points: Array<{ x: number; z: number }>,
+    width = 9.6,
+  ) => {
+    const curve = new THREE.CatmullRomCurve3(
+      points.map((pt) => new THREE.Vector3(pt.x, 0, pt.z)),
+      false,
+      'catmullrom',
+      0.5,
+    );
+    const steps = 18;
+    const sampled = curve.getPoints(steps);
+    for (let i = 0; i < sampled.length - 1; i++) {
+      const p1 = sampled[i];
+      const p2 = sampled[i + 1];
+      const seg: ExpansionRoadSpec = {
+        id: `${prefix}-${i}`,
+        name,
+        x1: p1.x,
+        z1: p1.z,
+        x2: p2.x,
+        z2: p2.z,
+        width,
+        hasDoubleCenterLine: true,
+        roadTier: 'scenic-curve',
+        isMainAvenue: true,
+      };
+      roads.push(seg);
+      curvyRoadSegments.push(seg);
+    }
+  };
+
+  // North Crown Winding Scenic Parkway (links NW alpine edge across north meadow, clear of row -18)
+  addCurvyParkway('exp-curve-north', 'Alpine Panorama Curve', [
+    { x: -540, z: -832 },
+    { x: -280, z: -862 },
+    { x: 0, z: -836 },
+    { x: 280, z: -864 },
+    { x: 540, z: -830 },
+  ]);
+
+  // South Meadow Winding Scenic Parkway (gentle S-curve across southern countryside, clear of row +18)
+  addCurvyParkway('exp-curve-south', 'Linden Valley Winding Drive', [
+    { x: -540, z: 832 },
+    { x: -260, z: 864 },
+    { x: 20, z: 836 },
+    { x: 290, z: 862 },
+    { x: 550, z: 830 },
+  ]);
+
+  // East Horizon Sweeping Meadow Curve (clear of col +8 outer blocks and eastern river)
+  addCurvyParkway('exp-curve-east', 'Horizon Creek Scenic Curve', [
+    { x: 1068, z: -290 },
+    { x: 1114, z: -145 },
+    { x: 1076, z: 0 },
+    { x: 1114, z: 145 },
+    { x: 1068, z: 290 },
+  ]);
 
   // ---------------------------------------------------------------------------
   // 2. VENICE CANAL BRIDGES (DOUBLE-LANE ROAD BRIDGES + ARCHED PEDESTRIAN BRIDGES)
@@ -838,31 +915,38 @@ export function buildExpansionCityWorld(residents: FollowerRecord[]): ExpansionC
     });
   }
 
+  // Cleanly aligned 49 OG Luxury Villa slots in 4 symmetrical wings clear of X=±36, X=-140, X=+145, X=±246
   const ogSlots: Array<{ x: number; z: number; facing: number; addr: string }> = [];
-  for (let i = 0; i < 6; i++) {
-    ogSlots.push({ x: -222 + i * 32, z: -152, facing: 0, addr: `${10 + i * 2} Royal Crown Ring` });
+  const westOuterXs = [-223, -193, -163];
+  const westInnerXs = [-117, -87, -57];
+  const eastInnerXs = [58, 88, 118];
+  const eastOuterXs = [167, 196, 225];
+  const allBandXs = [...westOuterXs, ...westInnerXs, ...eastInnerXs, ...eastOuterXs];
+
+  const rowSpecs: Array<{ z: number; facing: number; street: string; baseNum: number }> = [
+    { z: -152, facing: 0, street: 'Royal Crown Ring', baseNum: 10 },
+    { z: -224, facing: Math.PI, street: 'OG Villas Avenue', baseNum: 11 },
+    { z: -270, facing: 0, street: 'OG Villas Avenue', baseNum: 40 },
+    { z: -304, facing: Math.PI, street: 'Linden North Canal Blvd', baseNum: 1 },
+  ];
+
+  for (const row of rowSpecs) {
+    allBandXs.forEach((ox, colIdx) => {
+      ogSlots.push({
+        x: ox,
+        z: row.z,
+        facing: row.facing,
+        addr: `${row.baseNum + colIdx * 2} ${row.street}`,
+      });
+    });
   }
-  for (let i = 0; i < 6; i++) {
-    ogSlots.push({ x: -222 + i * 32, z: -224, facing: Math.PI, addr: `${11 + i * 2} OG Villas Avenue` });
-  }
-  for (let i = 0; i < 6; i++) {
-    ogSlots.push({ x: -222 + i * 32, z: -270, facing: 0, addr: `${24 + i * 2} OG Villas Avenue` });
-  }
-  for (let i = 0; i < 7; i++) {
-    ogSlots.push({ x: -222 + i * 32, z: -304, facing: Math.PI, addr: `${1 + i * 2} Linden North Canal Blvd` });
-  }
-  for (let i = 0; i < 6; i++) {
-    ogSlots.push({ x: 62 + i * 32, z: -152, facing: 0, addr: `${40 + i * 2} Royal Crown Ring` });
-  }
-  for (let i = 0; i < 6; i++) {
-    ogSlots.push({ x: 62 + i * 32, z: -224, facing: Math.PI, addr: `${41 + i * 2} OG Villas Avenue` });
-  }
-  for (let i = 0; i < 6; i++) {
-    ogSlots.push({ x: 62 + i * 32, z: -270, facing: 0, addr: `${54 + i * 2} OG Villas Avenue` });
-  }
-  for (let i = 0; i < 6; i++) {
-    ogSlots.push({ x: 62 + i * 32, z: -304, facing: Math.PI, addr: `${25 + i * 2} Linden North Canal Blvd` });
-  }
+  // 49th OG Slot (OG-50): faces East onto Royal Villa Terrace West (x = -36), directly opposite VIP Estate
+  ogSlots.push({
+    x: -56,
+    z: -188,
+    facing: Math.PI / 2,
+    addr: '22 Royal Villa Terrace West',
+  });
 
   ogOthers.forEach((member, i) => {
     const slot = ogSlots[i];
@@ -876,7 +960,7 @@ export function buildExpansionCityWorld(residents: FollowerRecord[]): ExpansionC
       address: slot.addr,
       x: slot.x,
       z: slot.z,
-      width: 26,
+      width: 25,
       depth: 22,
       facingAngle: slot.facing,
       status: 'og',
@@ -886,6 +970,48 @@ export function buildExpansionCityWorld(residents: FollowerRecord[]): ExpansionC
       gardenFlowerTint: GARDEN_TINTS[i % GARDEN_TINTS.length],
     });
   });
+
+  // Landscaped OG Pocket Gardens filling every 4m–5m gap between neighboring OG Villas
+  const ogPocketGardens: OgPocketGardenSpec[] = [];
+  const gapGroups: Array<{ xs: number[]; width: number }> = [
+    { xs: [-208, -178], width: 4.6 },
+    { xs: [-102, -72], width: 4.6 },
+    { xs: [73, 103], width: 4.6 },
+    { xs: [181.5, 210.5], width: 3.6 },
+  ];
+  let gpIdx = 0;
+  for (const row of rowSpecs) {
+    for (const grp of gapGroups) {
+      for (const gx of grp.xs) {
+        ogPocketGardens.push({
+          id: `og-gap-${gpIdx}`,
+          x: gx,
+          z: row.z,
+          width: grp.width,
+          depth: 20.6,
+          flowerTint: GARDEN_TINTS[gpIdx % GARDEN_TINTS.length],
+          hasBench: gpIdx % 2 === 0,
+        });
+        gpIdx++;
+      }
+    }
+  }
+  // Extra pocket gardens flanking OG-50 along z = -188 (x = -112..-82 and east open lawn x = 62..114)
+  for (const extra of [
+    { x: -102, z: -188, w: 16, d: 18 },
+    { x: 88, z: -188, w: 22, d: 18 },
+  ]) {
+    ogPocketGardens.push({
+      id: `og-gap-extra-${gpIdx}`,
+      x: extra.x,
+      z: extra.z,
+      width: extra.w,
+      depth: extra.d,
+      flowerTint: GARDEN_TINTS[gpIdx % GARDEN_TINTS.length],
+      hasBench: true,
+    });
+    gpIdx++;
+  }
 
   // ---------------------------------------------------------------------------
   // 4. NEIGHBORHOOD BLOCKS ACROSS STRICTLY RESIDENTIAL DISTRICTS (NO COMMERCIAL)
@@ -905,8 +1031,8 @@ export function buildExpansionCityWorld(residents: FollowerRecord[]): ExpansionC
   }
 
   const validBlocks: CandidateBlock[] = [];
-  for (let col = -7; col <= 7; col++) {
-    for (let row = -17; row <= 17; row++) {
+  for (let col = -8; col <= 8; col++) {
+    for (let row = -18; row <= 18; row++) {
       const cx = col * STEP_X;
       const cz = row * STEP_Z;
       const rect: BoxRect = {
@@ -917,9 +1043,9 @@ export function buildExpansionCityWorld(residents: FollowerRecord[]): ExpansionC
       };
       if (RESERVED_ZONES.some((rz) => rectsOverlap(rect, rz))) continue;
 
-      // Keep outer boundary cleanly inside elliptical Panoramic Ring Road
-      const normR = (cx / 1040) ** 2 + (cz / 780) ** 2;
-      if (normR > 0.96) continue;
+      // Keep outer boundary cleanly inside elliptical Panoramic Ring Road (rx=1175, rz=890)
+      const normR = (cx / 1115) ** 2 + (cz / 815) ** 2;
+      if (normR > 0.92) continue;
 
       validBlocks.push({
         col,
@@ -1221,6 +1347,8 @@ export function buildExpansionCityWorld(residents: FollowerRecord[]): ExpansionC
     vipPlot,
     monumentPosition: { x: 0, z: -158 },
     roads,
+    curvyRoadSegments,
+    ogPocketGardens,
     canals: VENICE_CANALS,
     bridges,
     districtParks: DISTRICT_PARKS,

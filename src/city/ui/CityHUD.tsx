@@ -80,6 +80,7 @@ import type {
   ExpansionPlotSpec,
   ParsedFollowerDataset,
 } from '../expansion/types';
+import type { MasterCityMap, UrbanPlanConfig } from '../planning/types';
 
 export interface InspectedVehicleInfo {
   id: string;
@@ -118,6 +119,7 @@ interface CityHUDProps {
   welcomeOpen: boolean;
   selectedPlot: TownPlot | null;
   selectedExpansionPlot?: ExpansionPlotSpec | null;
+  masterPlan: MasterCityMap;
   expansionWorld?: ExpansionCityWorld | null;
   followerDataset?: ParsedFollowerDataset | null;
   expansionManifest?: ExpansionManifest | null;
@@ -205,6 +207,10 @@ interface CityHUDProps {
   onToggleBirdAudio: () => void;
   onToggleReelsFrame: () => void;
   onToggleHideUI: () => void;
+  onUpdatePlanConfig: (patch: Partial<UrbanPlanConfig>) => void;
+  onRegenerateBlock: (blockId: string) => void;
+  onExpandCityBlock: () => void;
+  onResetMasterPlan: () => void;
 }
 
 const TOUR_LABELS: Array<{ id: CinematicTourId; label: string }> = [
@@ -245,6 +251,7 @@ export const CityHUD: React.FC<CityHUDProps> = ({
   welcomeOpen,
   selectedPlot,
   selectedExpansionPlot,
+  masterPlan,
   expansionWorld,
   followerDataset,
   expansionManifest,
@@ -316,6 +323,10 @@ export const CityHUD: React.FC<CityHUDProps> = ({
   onToggleBirdAudio,
   onToggleReelsFrame,
   onToggleHideUI,
+  onUpdatePlanConfig,
+  onRegenerateBlock,
+  onExpandCityBlock,
+  onResetMasterPlan,
 }) => {
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -378,11 +389,11 @@ export const CityHUD: React.FC<CityHUDProps> = ({
         </div>
 
         <div className="pointer-events-auto flex items-center gap-1 shrink-0">
-          {onToggleCityMap && expansionWorld && (
+          {onToggleCityMap && (
             <button
               type="button"
               onClick={() => onToggleCityMap(true)}
-              title="Complete City Map & House Finder"
+              title="Master City Map & Urban Planning Inspector"
               className={`h-7 sm:h-8 flex items-center gap-1 px-1.5 sm:px-2 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors whitespace-nowrap ${
                 cityMapOpen
                   ? 'bg-sky-500 text-slate-950 border-sky-300'
@@ -1610,12 +1621,13 @@ export const CityHUD: React.FC<CityHUDProps> = ({
         </nav>
       </div>
 
-      {/* Interactive Bird's-Eye Complete City Map Modal */}
-      {expansionWorld && onToggleCityMap && (
+      {/* Interactive Bird's-Eye Complete City Map & Urban Planner Modal */}
+      {onToggleCityMap && (
         <FullCityMapModal
           isOpen={cityMapOpen}
           onClose={() => onToggleCityMap(false)}
           corePlots={plots}
+          masterPlan={masterPlan}
           expansionWorld={expansionWorld}
           playerPose={playerCoords}
           onFlyTo={(x, z, expPlot, corePlot) => {
@@ -1633,10 +1645,18 @@ export const CityHUD: React.FC<CityHUDProps> = ({
             onWalkToLocation?.(x, z, expPlot, corePlot);
             onToggleCityMap(false);
           }}
-          onOpenMonument={() => {
-            onToggleCityMap(false);
-            onToggleOgMonument?.(true);
-          }}
+          onOpenMonument={
+            onToggleOgMonument
+              ? () => {
+                  onToggleCityMap(false);
+                  onToggleOgMonument(true);
+                }
+              : undefined
+          }
+          onUpdatePlanConfig={onUpdatePlanConfig}
+          onRegenerateBlock={onRegenerateBlock}
+          onExpandCityBlock={onExpandCityBlock}
+          onResetMasterPlan={onResetMasterPlan}
         />
       )}
 

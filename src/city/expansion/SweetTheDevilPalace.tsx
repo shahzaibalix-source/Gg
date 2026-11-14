@@ -5,6 +5,7 @@ import { TimeOfDay } from '../types';
 import { ExpansionPlotSpec } from './types';
 import { SIDEWALK_HEIGHT } from '../world/MasterTownBlueprint';
 import { VIP_DISPLAY_LABEL } from './zipFollowerParser';
+import { ResidentialFence } from '../assets/ResidentialFence';
 
 interface SweetTheDevilPalaceProps {
   plot: ExpansionPlotSpec;
@@ -256,6 +257,28 @@ export const SweetTheDevilPalace: React.FC<SweetTheDevilPalaceProps> = ({
             metalness={0.18}
           />
         </mesh>
+      </group>
+
+      {/* Royal Courtyard Ceremonial Entrance Apron (links palace steps & plaza) */}
+      <mesh position={[0, SIDEWALK_HEIGHT + 0.014, 19.8]} receiveShadow>
+        <boxGeometry args={[8.4, 0.024, 6.4]} />
+        <meshStandardMaterial
+          color="#dfd7c6"
+          roughness={0.72}
+          polygonOffset
+          polygonOffsetFactor={-1}
+        />
+      </mesh>
+
+      {/* Royal Gold-Capped Limestone & Wrought-Iron Estate Perimeter Fence */}
+      <group position={[0, SIDEWALK_HEIGHT, 0]}>
+        <ResidentialFence
+          plotWidth={plot.width}
+          plotDepth={plot.depth}
+          inset={0.28}
+          isRoyal
+          frontOpenings={[{ centerX: 0, width: 9.2, hasGateLeaves: false }]}
+        />
       </group>
 
       {/* Selection Outline Ring */}

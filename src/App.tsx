@@ -36,6 +36,8 @@ import {
   buildExpansionCityWorld,
   ExpansionCityWorld,
 } from './city/expansion/ExpansionMasterPlan';
+import { generateMasterCityMap } from './city/planning/MasterCityPlanner';
+import { DEFAULT_URBAN_PLAN_CONFIG, UrbanPlanConfig } from './city/planning/types';
 import {
   CompactShardEntry,
   ExpansionManifest,
@@ -161,9 +163,51 @@ const PARK_INFO_MAP: Record<string, InspectedParkInfo> = {
 };
 
 export default function App() {
-  const registry = useMemo(() => new CityRegistry(), []);
+  const [urbanPlanConfig, setUrbanPlanConfig] = useState<UrbanPlanConfig>(DEFAULT_URBAN_PLAN_CONFIG);
+  const masterCityPlan = useMemo(
+    () => generateMasterCityMap(urbanPlanConfig),
+    [urbanPlanConfig],
+  );
+  const registry = useMemo(() => new CityRegistry(masterCityPlan.plots), []);
   const [plots, setPlots] = useState<TownPlot[]>(() => registry.getAllPlots());
   const [treasuryVersion, setTreasuryVersion] = useState(0);
+
+  useEffect(() => {
+    registry.syncPlannedPlots(masterCityPlan.plots);
+    setPlots(registry.getAllPlots());
+  }, [registry, masterCityPlan]);
+
+  const handleUpdatePlanConfig = useCallback((patch: Partial<UrbanPlanConfig>) => {
+    setUrbanPlanConfig((prev) => ({
+      ...prev,
+      ...patch,
+      blockSeeds: {
+        ...prev.blockSeeds,
+        ...(patch.blockSeeds ?? {}),
+      },
+    }));
+  }, []);
+
+  const handleRegenerateBlock = useCallback((blockId: string) => {
+    setUrbanPlanConfig((prev) => ({
+      ...prev,
+      blockSeeds: {
+        ...prev.blockSeeds,
+        [blockId]: (prev.blockSeeds[blockId] ?? 0) + 1,
+      },
+    }));
+  }, []);
+
+  const handleExpandCityBlock = useCallback(() => {
+    setUrbanPlanConfig((prev) => ({
+      ...prev,
+      expansionBlockCount: Math.min(3, prev.expansionBlockCount + 1),
+    }));
+  }, []);
+
+  const handleResetMasterPlan = useCallback(() => {
+    setUrbanPlanConfig(DEFAULT_URBAN_PLAN_CONFIG);
+  }, []);
 
   const [cameraMode, setCameraMode] = useState<CameraMode>('isometric');
   const [cinematicTour, setCinematicTour] = useState<CinematicTourId>('town-hall-reveal');
@@ -1453,6 +1497,7 @@ export default function App() {
       >
         <CityScene
           plots={plots}
+          masterPlan={masterCityPlan}
           expansionWorld={expansionWorld}
           cameraMode={cameraMode}
           cinematicTour={cinematicTour}
@@ -1514,6 +1559,7 @@ export default function App() {
         welcomeOpen={welcomeOpen}
         selectedPlot={selectedPlot}
         selectedExpansionPlot={selectedExpansionPlot}
+        masterPlan={masterCityPlan}
         expansionWorld={expansionWorld}
         followerDataset={followerDataset}
         expansionManifest={expansionManifest}
@@ -1587,6 +1633,10 @@ export default function App() {
         onToggleBirdAudio={handleToggleBirdAudio}
         onToggleReelsFrame={() => setReelsFrameEnabled((v) => !v)}
         onToggleHideUI={() => setUiHidden((v) => !v)}
+        onUpdatePlanConfig={handleUpdatePlanConfig}
+        onRegenerateBlock={handleRegenerateBlock}
+        onExpandCityBlock={handleExpandCityBlock}
+        onResetMasterPlan={handleResetMasterPlan}
       />
     </main>
   );

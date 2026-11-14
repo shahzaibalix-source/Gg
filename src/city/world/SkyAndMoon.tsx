@@ -120,6 +120,10 @@ export const SkyAndMoon: React.FC<SkyAndMoonProps> = ({
 }) => {
   const haloRef = useRef<THREE.Mesh>(null);
   const starMatRef = useRef<THREE.ShaderMaterial>(null);
+  const cloudMeshRef = useRef<THREE.InstancedMesh>(null);
+  const birdBodyRef = useRef<THREE.InstancedMesh>(null);
+  const birdWingLRef = useRef<THREE.InstancedMesh>(null);
+  const birdWingRRef = useRef<THREE.InstancedMesh>(null);
 
   const palette = SKY_PALETTES[timeOfDay];
   const isMutedWeather = weather === 'cloudy' || weather === 'rainy' || weather === 'foggy';
@@ -337,6 +341,153 @@ export const SkyAndMoon: React.FC<SkyAndMoonProps> = ({
   const moonOpacity =
     weather === 'rainy' ? 0.35 : weather === 'cloudy' ? 0.55 : weather === 'foggy' ? 0.65 : 1.0;
 
+  // Drifting multi-puff clouds & soaring bird flocks
+  const cloudDummy = useMemo(() => new THREE.Object3D(), []);
+  const clouds = useMemo(() => {
+    let seed = 7721;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+    const puffs: Array<{
+      clusterX: number;
+      clusterZ: number;
+      ox: number;
+      oy: number;
+      oz: number;
+      y: number;
+      sx: number;
+      sy: number;
+      sz: number;
+      speed: number;
+    }> = [];
+    for (let c = 0; c < 24; c++) {
+      const cx = (rand() - 0.5) * 2400;
+      const cz = (rand() - 0.5) * 1900;
+      const cy = 205 + rand() * 68;
+      const speed = 3.2 + rand() * 3.8;
+      for (let p = 0; p < 4; p++) {
+        puffs.push({
+          clusterX: cx,
+          clusterZ: cz,
+          ox: (p - 1.5) * (16 + rand() * 8),
+          oy: p === 1 || p === 2 ? 4 + rand() * 4 : 0,
+          oz: (rand() - 0.5) * 14,
+          y: cy,
+          sx: 24 + rand() * 18,
+          sy: 9 + rand() * 5,
+          sz: 18 + rand() * 12,
+          speed,
+        });
+      }
+    }
+    return puffs;
+  }, []);
+
+  const birds = useMemo(() => {
+    let seed = 3191;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+    return Array.from({ length: 18 }, (_, i) => {
+      const flock = i % 3;
+      const baseCx = flock === 0 ? 58 : flock === 1 ? 236 : 460;
+      const baseCz = flock === 0 ? -8 : flock === 1 ? 0 : -15;
+      return {
+        cx: baseCx + (rand() - 0.5) * 35,
+        cz: baseCz + (rand() - 0.5) * 35,
+        radiusX: 48 + rand() * 55,
+        radiusZ: 38 + rand() * 48,
+        y: 36 + rand() * 28,
+        speed: 0.14 + rand() * 0.1,
+        phase: rand() * Math.PI * 2,
+        flapSpeed: 7.2 + rand() * 2.4,
+      };
+    });
+  }, []);
+
+  const cloudColor =
+    timeOfDay === 'night'
+      ? '#1d2942'
+      : timeOfDay === 'sunset'
+        ? '#f6b99c'
+        : weather === 'rainy'
+          ? '#7c8b9b'
+          : '#f8fafc';
+  const cloudOpacity =
+    timeOfDay === 'night'
+      ? 0.34
+      : weather === 'cloudy' || weather === 'rainy'
+        ? 0.84
+        : 0.72;
+  const showBirds = timeOfDay !== 'night' && weather !== 'rainy';
+
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+
+    if (cloudMeshRef.current) {
+      for (let i = 0; i < clouds.length; i++) {
+        const c = clouds[i];
+        const x = (((c.clusterX + t * c.speed + 1400) % 2800) - 1400) + c.ox;
+        cloudDummy.position.set(x, c.y + c.oy, c.clusterZ + c.oz);
+        cloudDummy.rotation.set(0, 0, 0);
+        cloudDummy.scale.set(c.sx, c.sy, c.sz);
+        cloudDummy.updateMatrix();
+        cloudMeshRef.current.setMatrixAt(i, cloudDummy.matrix);
+      }
+      cloudMeshRef.current.instanceMatrix.needsUpdate = true;
+    }
+
+    if (
+      showBirds &&
+      birdBodyRef.current &&
+      birdWingLRef.current &&
+      birdWingRRef.current
+    ) {
+      for (let i = 0; i < birds.length; i++) {
+        const b = birds[i];
+        const ang = t * b.speed + b.phase;
+        const bx = b.cx + Math.cos(ang) * b.radiusX;
+        const bz = b.cz + Math.sin(ang) * b.radiusZ;
+        const vx = -Math.sin(ang) * b.radiusX * b.speed;
+        const vz = Math.cos(ang) * b.radiusZ * b.speed;
+        const yaw = Math.atan2(vx, vz);
+        const by = b.y + Math.sin(t * 1.4 + b.phase) * 1.6;
+        const flap = Math.sin(t * b.flapSpeed + b.phase) * 0.58;
+
+        cloudDummy.position.set(bx, by, bz);
+        cloudDummy.rotation.set(0, yaw, 0);
+        cloudDummy.scale.set(0.22, 0.16, 0.72);
+        cloudDummy.updateMatrix();
+        birdBodyRef.current.setMatrixAt(i, cloudDummy.matrix);
+
+        cloudDummy.position.set(
+          bx - Math.cos(yaw) * 0.34,
+          by + Math.sin(flap) * 0.14,
+          bz + Math.sin(yaw) * 0.34,
+        );
+        cloudDummy.rotation.set(0, yaw, -flap);
+        cloudDummy.scale.set(0.68, 0.05, 0.24);
+        cloudDummy.updateMatrix();
+        birdWingLRef.current.setMatrixAt(i, cloudDummy.matrix);
+
+        cloudDummy.position.set(
+          bx + Math.cos(yaw) * 0.34,
+          by + Math.sin(flap) * 0.14,
+          bz - Math.sin(yaw) * 0.34,
+        );
+        cloudDummy.rotation.set(0, yaw, flap);
+        cloudDummy.scale.set(0.68, 0.05, 0.24);
+        cloudDummy.updateMatrix();
+        birdWingRRef.current.setMatrixAt(i, cloudDummy.matrix);
+      }
+      birdBodyRef.current.instanceMatrix.needsUpdate = true;
+      birdWingLRef.current.instanceMatrix.needsUpdate = true;
+      birdWingRRef.current.instanceMatrix.needsUpdate = true;
+    }
+  });
+
   return (
     <group>
       {/* Seamless Atmospheric Gradient Sky Dome */}
@@ -349,6 +500,53 @@ export const SkyAndMoon: React.FC<SkyAndMoonProps> = ({
         <points geometry={starGeo} renderOrder={-9} frustumCulled={false}>
           <primitive object={starShaderMat} ref={starMatRef} attach="material" />
         </points>
+      )}
+
+      {/* Soft Drifting Multi-Puff Sky Clouds */}
+      <instancedMesh
+        ref={cloudMeshRef}
+        args={[undefined, undefined, clouds.length]}
+        frustumCulled={false}
+        renderOrder={-5}
+      >
+        <dodecahedronGeometry args={[1, 1]} />
+        <meshBasicMaterial
+          color={cloudColor}
+          transparent
+          opacity={cloudOpacity}
+          fog={false}
+          depthWrite={false}
+        />
+      </instancedMesh>
+
+      {/* Soaring Animated Bird Flocks */}
+      {showBirds && (
+        <group>
+          <instancedMesh
+            ref={birdBodyRef}
+            args={[undefined, undefined, birds.length]}
+            frustumCulled={false}
+          >
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color="#1e293b" roughness={0.7} />
+          </instancedMesh>
+          <instancedMesh
+            ref={birdWingLRef}
+            args={[undefined, undefined, birds.length]}
+            frustumCulled={false}
+          >
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color="#334155" roughness={0.7} />
+          </instancedMesh>
+          <instancedMesh
+            ref={birdWingRRef}
+            args={[undefined, undefined, birds.length]}
+            frustumCulled={false}
+          >
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color="#334155" roughness={0.7} />
+          </instancedMesh>
+        </group>
       )}
 
       {/* Luminous Full Moon + Soft Corona Aligned with Moonlight Shadows */}

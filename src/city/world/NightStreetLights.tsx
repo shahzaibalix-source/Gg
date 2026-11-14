@@ -3,10 +3,12 @@ import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { SIDEWALK_HEIGHT, STREET_LAMPS } from './MasterTownBlueprint';
 import { TimeOfDay } from '../types';
+import type { MasterCityMap } from '../planning/types';
 
 interface NightStreetLightsProps {
   timeOfDay: TimeOfDay;
   isSoftwareGl: boolean;
+  masterPlan?: MasterCityMap | null;
 }
 
 const POOL_SIZE = 5;
@@ -15,13 +17,14 @@ const _focus = new THREE.Vector3();
 
 /**
  * Functional shadow-casting streetlight spotlight pool activated automatically at 'night'.
- * Dynamically tracks the 5 nearest STREET_LAMPS to the active viewport focus / player,
+ * Dynamically tracks the 5 nearest streetlamps from MasterCityMap (or static STREET_LAMPS),
  * casting real shadows onto streets, sidewalks, vehicles, benches, and characters
  * while staying safely within WebGL's 16-texture-unit hardware limit.
  */
 export const NightStreetLights: React.FC<NightStreetLightsProps> = ({
   timeOfDay,
   isSoftwareGl,
+  masterPlan,
 }) => {
   const { camera } = useThree();
   const spotRefs = useRef<Array<THREE.SpotLight | null>>([]);
@@ -38,23 +41,24 @@ export const NightStreetLights: React.FC<NightStreetLightsProps> = ({
   }, []);
   const bestDists = useMemo(() => new Float64Array(POOL_SIZE), []);
 
-  // Precomputed bulb + ground target world coordinates for all 40 lamps (zero GC per frame)
-  const lampWorldCoords = useMemo(
-    () =>
-      STREET_LAMPS.map((lamp) => {
-        const sin = Math.sin(lamp.rotationY);
-        const cos = Math.cos(lamp.rotationY);
-        return {
-          bx: lamp.x + sin * 0.68,
-          by: SIDEWALK_HEIGHT + 3.44,
-          bz: lamp.z + cos * 0.68,
-          tx: lamp.x + sin * 1.65,
-          ty: 0.04,
-          tz: lamp.z + cos * 1.65,
-        };
-      }),
-    [],
-  );
+  const activeLamps = masterPlan?.streetLamps ?? STREET_LAMPS;
+
+  // Precomputed bulb + ground target world coordinates (zero GC per frame)
+  const lampWorldCoords = useMemo(() => {
+    prevIndices.fill(-1);
+    return activeLamps.map((lamp) => {
+      const sin = Math.sin(lamp.rotationY);
+      const cos = Math.cos(lamp.rotationY);
+      return {
+        bx: lamp.x + sin * 0.68,
+        by: SIDEWALK_HEIGHT + 3.44,
+        bz: lamp.z + cos * 0.68,
+        tx: lamp.x + sin * 1.65,
+        ty: 0.04,
+        tz: lamp.z + cos * 1.65,
+      };
+    });
+  }, [activeLamps, prevIndices]);
 
   useFrame(() => {
     if (timeOfDay !== 'night') return;

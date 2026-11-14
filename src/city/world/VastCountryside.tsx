@@ -8,6 +8,7 @@ import {
   createRealisticWaterMaterial,
 } from '../materials/realisticNature';
 import { GrassTuftPlacement, InstancedGrassField } from '../assets/NaturePropsAndWater';
+import { distancePointToSegment2D, filterWithMinSpacing } from './TreePlacementValidator';
 
 interface VastCountrysideProps {
   textures: CityTextureSet;
@@ -31,8 +32,8 @@ export function riverCenterXAtZ(z: number): number {
  * park, or plot is ever displaced.
  */
 export function terrainHeightAt(x: number, z: number): number {
-  const edgeDist = Math.max(Math.abs(x), Math.abs(z));
-  const cityMask = smoothstep(1095, 1245, edgeDist);
+  const edgeNorm = Math.max(Math.abs(x) / 1192, Math.abs(z) / 915);
+  const cityMask = smoothstep(1.0, 1.12, edgeNorm);
   if (cityMask <= 0.0001) return 0;
 
   // Lush undulating foothills
@@ -110,8 +111,8 @@ export const VastCountryside: React.FC<VastCountrysideProps> = ({ textures }) =>
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i);
       const z = pos.getZ(i);
-      const edgeDist = Math.max(Math.abs(x), Math.abs(z));
-      const y = edgeDist < 1095 ? 0 : terrainHeightAt(x, z);
+      const edgeNorm = Math.max(Math.abs(x) / 1192, Math.abs(z) / 915);
+      const y = edgeNorm < 1.0 ? 0 : terrainHeightAt(x, z);
       pos.setY(i, y);
 
       if (uv) {
@@ -121,7 +122,7 @@ export const VastCountryside: React.FC<VastCountrysideProps> = ({ textures }) =>
       const distToRiver = Math.abs(x - riverCenterXAtZ(z));
 
       _color.copy(cMeadow);
-      _color.lerp(cPasture, smoothstep(1095, 1245, edgeDist));
+      _color.lerp(cPasture, smoothstep(1.0, 1.12, edgeNorm));
       _color.lerp(cForestHill, smoothstep(8, 34, y));
       _color.lerp(cRock, smoothstep(38, 72, y));
       _color.lerp(cSnow, smoothstep(78, 114, y));
@@ -254,19 +255,33 @@ export const VastCountryside: React.FC<VastCountrysideProps> = ({ textures }) =>
     const grassTints = ['#629845', '#73ab51', '#518539', '#7db559'];
 
     const isClearOfPaths = (x: number, z: number) => {
-      if (Math.max(Math.abs(x), Math.abs(z)) < 1090) return false;
-      if (Math.abs(x - riverCenterXAtZ(z)) < 21) return false;
-      if (Math.abs(z - 78) < 12 && x > 1060 && x < 1380) return false;
-      if (Math.abs(z + 26) < 12 && x < -1050 && x > -1285) return false;
-      if (Math.abs(x + 26) < 12 && z < -780 && z > -1080) return false;
-      if (Math.abs(x - 26) < 12 && z > 780 && z < 1100) return false;
+      // Keep well clear of the outer elliptical panoramic ring road (rx=1175, rz=890) & urban basin
+      if (Math.abs(x) < 1205 && Math.abs(z) < 928) return false;
+      const ellipNorm = Math.hypot(x / 1175, z / 890);
+      if (ellipNorm <= 1.022) return false;
+      // Clear of river channel and banks
+      if (Math.abs(x - riverCenterXAtZ(z)) < 22) return false;
+      // Exact point-to-segment check against all countryside trails
+      for (const seg of TRAIL_SEGMENTS) {
+        if (distancePointToSegment2D(x, z, seg.x1, seg.z1, seg.x2, seg.z2) < seg.width * 0.5 + 5.2) {
+          return false;
+        }
+      }
       return true;
     };
 
-    // 1,050 HD Alpine & Forest Trees surrounding the residential basin
-    for (let i = 0; i < 1150; i++) {
+    // 1,050 HD Alpine & Forest Trees surrounding the residential basin (spacing-verified)
+    const candidateTrees: Array<{
+      x: number;
+      y: number;
+      z: number;
+      scale: number;
+      tint: string;
+      isPine: boolean;
+    }> = [];
+    for (let i = 0; i < 1350; i++) {
       const angle = rand() * Math.PI * 2;
-      const radius = 1092 + Math.pow(rand(), 0.72) * 690;
+      const radius = 1105 + Math.pow(rand(), 0.72) * 680;
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
       if (!isClearOfPaths(x, z)) continue;
@@ -274,10 +289,23 @@ export const VastCountryside: React.FC<VastCountrysideProps> = ({ textures }) =>
       const y = terrainHeightAt(x, z);
       if (y > 68) continue; // Keep upper alpine snow peaks rocky & open
       const scale = 1.05 + rand() * 1.15;
-      if (y > 24 || rand() < 0.56) {
-        pines.push({ x, y, z, scale, tint: pineTints[i % pineTints.length] });
+      const isPine = y > 24 || rand() < 0.56;
+      candidateTrees.push({
+        x,
+        y,
+        z,
+        scale,
+        isPine,
+        tint: isPine ? pineTints[i % pineTints.length] : leafTints[i % leafTints.length],
+      });
+    }
+
+    const spacedTrees = filterWithMinSpacing(candidateTrees, 6.0);
+    for (const t of spacedTrees) {
+      if (t.isPine) {
+        pines.push({ x: t.x, y: t.y, z: t.z, scale: t.scale, tint: t.tint });
       } else {
-        broadleafs.push({ x, y, z, scale, tint: leafTints[i % leafTints.length] });
+        broadleafs.push({ x: t.x, y: t.y, z: t.z, scale: t.scale, tint: t.tint });
       }
     }
 

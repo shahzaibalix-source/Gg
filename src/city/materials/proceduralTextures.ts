@@ -51,18 +51,20 @@ function mulberry32(seed: number) {
 }
 
 export function createCityTextureSet(maxAnisotropy = 4): CityTextureSet {
-  // 1. Asphalt with fine mineral aggregate
+  // 1. Asphalt with fine mineral aggregate, quartz flecks & subtle tar seam
   const [asphaltCanvas, aCtx] = makeCanvas(512);
   aCtx.fillStyle = '#2d3138';
   aCtx.fillRect(0, 0, 512, 512);
   const rand1 = mulberry32(101);
-  for (let i = 0; i < 18000; i++) {
+  for (let i = 0; i < 20000; i++) {
     const x = rand1() * 512;
     const y = rand1() * 512;
-    const v = 36 + Math.floor(rand1() * 28);
+    const v = 35 + Math.floor(rand1() * 32);
     aCtx.fillStyle = `rgb(${v}, ${v + 2}, ${v + 5})`;
-    aCtx.fillRect(x, y, rand1() > 0.7 ? 2 : 1, rand1() > 0.7 ? 2 : 1);
+    aCtx.fillRect(x, y, rand1() > 0.72 ? 2 : 1, rand1() > 0.72 ? 2 : 1);
   }
+  aCtx.fillStyle = 'rgba(20, 22, 26, 0.35)';
+  aCtx.fillRect(0, 255, 512, 2);
   const asphalt = configureTexture(asphaltCanvas, 1, 1, maxAnisotropy);
 
   // 2. European granite sidewalk slabs
@@ -128,7 +130,7 @@ export function createCityTextureSet(maxAnisotropy = 4): CityTextureSet {
   }
   const grass = configureTexture(grassCanvas, 24, 24, maxAnisotropy);
 
-  // 5. Traditional European brick
+  // 5. Traditional European brick with crisp mortar & subtle grain
   const [brickCanvas, bCtx] = makeCanvas(512);
   bCtx.fillStyle = '#c8bfb2';
   bCtx.fillRect(0, 0, 512, 512);
@@ -145,6 +147,8 @@ export function createCityTextureSet(maxAnisotropy = 4): CityTextureSet {
       const b = 58 + Math.floor(rand5() * 18);
       bCtx.fillStyle = `rgb(${r},${g},${b})`;
       bCtx.fillRect(x + 2, y + 2, bw - 4, bh - 4);
+      bCtx.fillStyle = 'rgba(255,255,255,0.08)';
+      bCtx.fillRect(x + 2, y + 2, bw - 4, 2);
     }
   }
   const brick = configureTexture(brickCanvas, 2, 2, maxAnisotropy);
@@ -163,7 +167,7 @@ export function createCityTextureSet(maxAnisotropy = 4): CityTextureSet {
   }
   const plaster = configureTexture(plasterCanvas, 2, 2, maxAnisotropy);
 
-  // 7. Terracotta clay roof tiles
+  // 7. Terracotta clay roof tiles with highlights & lap shadow
   const [roofCanvas, rCtx] = makeCanvas(512);
   rCtx.fillStyle = '#9a4a33';
   rCtx.fillRect(0, 0, 512, 512);
@@ -175,13 +179,15 @@ export function createCityTextureSet(maxAnisotropy = 4): CityTextureSet {
       const b = 46 + Math.floor(rand7() * 14);
       rCtx.fillStyle = `rgb(${r},${g},${b})`;
       rCtx.fillRect(x + 1, y + 1, 22, 29);
-      rCtx.fillStyle = 'rgba(0,0,0,0.18)';
+      rCtx.fillStyle = 'rgba(255,235,215,0.12)';
+      rCtx.fillRect(x + 2, y + 2, 20, 3);
+      rCtx.fillStyle = 'rgba(0,0,0,0.22)';
       rCtx.fillRect(x, y + 29, 24, 3);
     }
   }
   const roofTile = configureTexture(roofCanvas, 3, 2, maxAnisotropy);
 
-  // 8. Slate roof tiles
+  // 8. Slate roof tiles with beveled edge highlight
   const [slateCanvas, sCtx] = makeCanvas(512);
   sCtx.fillStyle = '#3b424d';
   sCtx.fillRect(0, 0, 512, 512);
@@ -192,11 +198,13 @@ export function createCityTextureSet(maxAnisotropy = 4): CityTextureSet {
       const v = 54 + Math.floor(rand8() * 22);
       sCtx.fillStyle = `rgb(${v},${v + 6},${v + 14})`;
       sCtx.fillRect(x + shift + 1, y + 1, 30, 30);
+      sCtx.fillStyle = 'rgba(255,255,255,0.08)';
+      sCtx.fillRect(x + shift + 1, y + 1, 30, 2);
     }
   }
   const slateRoof = configureTexture(slateCanvas, 3, 2, maxAnisotropy);
 
-  // 9. Warm timber planks
+  // 9. Warm timber planks with grain lines
   const [timberCanvas, tCtx] = makeCanvas(512);
   tCtx.fillStyle = '#8b5e3c';
   tCtx.fillRect(0, 0, 512, 512);
@@ -205,7 +213,11 @@ export function createCityTextureSet(maxAnisotropy = 4): CityTextureSet {
     const tone = Math.floor(rand9() * 20);
     tCtx.fillStyle = `rgb(${132 + tone},${88 + tone},${56 + tone})`;
     tCtx.fillRect(x + 1, 0, 30, 512);
-    tCtx.fillStyle = 'rgba(40,22,10,0.15)';
+    for (let g = 0; g < 6; g++) {
+      tCtx.fillStyle = 'rgba(48,26,12,0.12)';
+      tCtx.fillRect(x + 3 + Math.floor(rand9() * 24), 0, 1, 512);
+    }
+    tCtx.fillStyle = 'rgba(40,22,10,0.18)';
     tCtx.fillRect(x, 0, 1, 512);
   }
   const timber = configureTexture(timberCanvas, 2, 2, maxAnisotropy);

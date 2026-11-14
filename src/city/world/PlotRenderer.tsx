@@ -6,7 +6,10 @@ import { HouseModel } from '../assets/HouseModel';
 import { CommercialBuilding } from '../assets/CommercialModels';
 import { CivicOrEntertainmentBuilding } from '../assets/CivicAndEntertainmentModels';
 import { PlotNameplateSign, StylizedTree } from '../assets/FoliageAndProps';
+import { ResidentialFence } from '../assets/ResidentialFence';
+import { CarMesh } from '../assets/VehicleModels';
 import { createBusinessPreset, HOUSE_PRESETS } from '../registry/CityRegistry';
+import { isPlotGardenTreeSafe } from './TreePlacementValidator';
 
 interface PlotRendererProps {
   plots: TownPlot[];
@@ -106,9 +109,40 @@ const SinglePlot: React.FC<SinglePlotProps> = React.memo(({
 
   const houseLocalX = house?.hasGarageCarport ? -0.8 : -0.4;
   const houseLocalZ = -1.2;
-  const drivewayX = halfW - 2.65;
-  const drivewayWidth = 3.1;
+  const pathX = house ? houseLocalX : 0;
+  const pathwayWidth = 2.4;
+  const drivewayX = house?.hasGarageCarport
+    ? Math.min(halfW - 2.15, houseLocalX + house.width / 2 + 1.45)
+    : halfW - 2.65;
+  const drivewayWidth = 3.2;
   const drivewayLen = halfD - 1.0;
+
+  const carColors = ['#2b4c6f', '#c93c34', '#d8d5cd', '#395a49', '#3f4754', '#b57b3b'];
+  const carStyles = ['sedan', 'hatchback', 'wagon'] as const;
+  const carHash = plot.plotCode.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  const carZ = house
+    ? Math.min(halfD - 2.45, Math.max(houseLocalZ + house.depth / 2 + 2.35, halfD - 3.9))
+    : halfD - 3.0;
+
+  // Wider front walkway spanning smoothly from front stoop across the gate onto the public sidewalk
+  const pathStartZ = house ? houseLocalZ + house.depth / 2 + 0.45 : 0.6;
+  const pathEndZ = halfD + 0.9;
+  const pathLen = Math.max(1.8, pathEndZ - pathStartZ);
+  const pathCenterZ = (pathStartZ + pathEndZ) / 2;
+  const curbStartZ = pathStartZ;
+  const curbEndZ = halfD - 0.04;
+  const curbLen = Math.max(1.0, curbEndZ - curbStartZ);
+  const curbCenterZ = (curbStartZ + curbEndZ) / 2;
+
+  // Courtyard spur connecting main pathway cleanly to the driveway inside the front yard
+  const spurStartX = pathX + pathwayWidth / 2;
+  const spurEndX = drivewayX - drivewayWidth / 2;
+  const spurLen = Math.max(0.4, spurEndX - spurStartX);
+  const spurCenterX = (spurStartX + spurEndX) / 2;
+  const spurZ = house
+    ? Math.min(halfD - 2.35, houseLocalZ + house.depth / 2 + 2.05)
+    : 3.2;
+  const spurWidth = 1.8;
 
   const previewRot = ((constructionDraft?.rotationQuarterTurns ?? 0) * Math.PI) / 2;
 
@@ -148,48 +182,159 @@ const SinglePlot: React.FC<SinglePlotProps> = React.memo(({
         />
       </mesh>
 
-      {/* Residential / Luxury Driveway & Garden Walkways */}
+      {/* Residential / Luxury Driveway, Wider Pathways & Individual Perimeter Fencing */}
       {isResidential && (
         <>
+          {/* Cobblestone Driveway + Side Curbs + Full Sidewalk-to-Road Apron */}
           <group position={[drivewayX, SIDEWALK_HEIGHT, 0]}>
             <mesh position={[0, 0.012, halfD - drivewayLen / 2]} receiveShadow>
               <boxGeometry args={[drivewayWidth, 0.024, drivewayLen]} />
-              <meshStandardMaterial map={textures.cobblestone} color="#c8bfb0" roughness={0.86} />
+              <meshStandardMaterial
+                map={textures.cobblestone}
+                color="#c8bfb0"
+                roughness={0.86}
+                polygonOffset
+                polygonOffsetFactor={-1}
+              />
             </mesh>
             <mesh position={[0, 0.014, halfD + 1.4]} receiveShadow>
               <boxGeometry args={[drivewayWidth, 0.024, 2.8]} />
-              <meshStandardMaterial map={textures.cobblestone} color="#c1b8a8" roughness={0.86} />
+              <meshStandardMaterial
+                map={textures.cobblestone}
+                color="#c1b8a8"
+                roughness={0.86}
+                polygonOffset
+                polygonOffsetFactor={-1}
+              />
             </mesh>
+            {/* Driveway stone border curbs */}
+            {[-drivewayWidth / 2 - 0.06, drivewayWidth / 2 + 0.06].map((cx, ci) => (
+              <mesh key={`dc-${ci}`} position={[cx, 0.02, (1.0 + halfD - 0.04) / 2]} receiveShadow>
+                <boxGeometry args={[0.12, 0.04, Math.max(1.0, halfD - 1.04)]} />
+                <meshStandardMaterial color="#b5ada0" roughness={0.85} />
+              </mesh>
+            ))}
           </group>
 
-          <mesh
-            position={[houseLocalX, SIDEWALK_HEIGHT + 0.012, (halfD + (houseLocalZ + 3.8)) / 2]}
-            receiveShadow
-          >
-            <boxGeometry args={[1.5, 0.024, Math.max(1.2, halfD - (houseLocalZ + 3.8))]} />
-            <meshStandardMaterial map={textures.sidewalkStone} color="#ddd5c7" roughness={0.86} />
+          {/* Spacious 2.4m Front Stone Pathway + Side Curbs + Sidewalk Threshold */}
+          <mesh position={[pathX, SIDEWALK_HEIGHT + 0.013, pathCenterZ]} receiveShadow>
+            <boxGeometry args={[pathwayWidth, 0.024, pathLen]} />
+            <meshStandardMaterial
+              map={textures.sidewalkStone}
+              color="#dfd7c8"
+              roughness={0.85}
+              polygonOffset
+              polygonOffsetFactor={-1}
+            />
           </mesh>
+          {[-pathwayWidth / 2 - 0.06, pathwayWidth / 2 + 0.06].map((cx, ci) => (
+            <mesh
+              key={`pc-${ci}`}
+              position={[pathX + cx, SIDEWALK_HEIGHT + 0.02, curbCenterZ]}
+              receiveShadow
+            >
+              <boxGeometry args={[0.12, 0.038, curbLen]} />
+              <meshStandardMaterial color="#b8b0a2" roughness={0.84} />
+            </mesh>
+          ))}
 
-          {/* Side Boundary Hedges & Rear Fence */}
-          <mesh position={[-halfW + 0.28, SIDEWALK_HEIGHT + 0.4, 0]} castShadow receiveShadow>
-            <boxGeometry args={[0.5, 0.8, depth - 0.8]} />
-            <meshStandardMaterial color="#3d6336" roughness={0.9} />
-          </mesh>
-          <mesh position={[halfW - 0.28, SIDEWALK_HEIGHT + 0.4, 0]} castShadow receiveShadow>
-            <boxGeometry args={[0.5, 0.8, depth - 0.8]} />
-            <meshStandardMaterial color="#3d6336" roughness={0.9} />
-          </mesh>
-          <mesh position={[0, SIDEWALK_HEIGHT + 0.52, -halfD + 0.18]} castShadow receiveShadow>
-            <boxGeometry args={[width - 0.8, 1.04, 0.16]} />
-            <meshStandardMaterial map={textures.timber} color="#8c6747" roughness={0.86} />
-          </mesh>
+          {/* Welcoming Front Porch Landing Pad */}
+          {house && (
+            <mesh
+              position={[pathX, SIDEWALK_HEIGHT + 0.015, houseLocalZ + house.depth / 2 + 0.95]}
+              receiveShadow
+            >
+              <boxGeometry args={[3.0, 0.026, 1.2]} />
+              <meshStandardMaterial
+                map={textures.sidewalkStone}
+                color="#e3dccf"
+                roughness={0.84}
+                polygonOffset
+                polygonOffsetFactor={-2}
+              />
+            </mesh>
+          )}
 
-          {/* Plot Nameplate Sign */}
+          {/* Connecting Courtyard Walkway linking Front Pathway to Driveway */}
+          {spurLen > 0.3 && (
+            <group position={[spurCenterX, SIDEWALK_HEIGHT, spurZ]}>
+              <mesh position={[0, 0.013, 0]} receiveShadow>
+                <boxGeometry args={[spurLen + 0.08, 0.024, spurWidth]} />
+                <meshStandardMaterial
+                  map={textures.sidewalkStone}
+                  color="#ded6c7"
+                  roughness={0.85}
+                  polygonOffset
+                  polygonOffsetFactor={-1}
+                />
+              </mesh>
+              {[-spurWidth / 2 - 0.05, spurWidth / 2 + 0.05].map((cz, ci) => (
+                <mesh key={`sc-${ci}`} position={[0, 0.02, cz]} receiveShadow>
+                  <boxGeometry args={[spurLen, 0.036, 0.1]} />
+                  <meshStandardMaterial color="#b8b0a2" roughness={0.84} />
+                </mesh>
+              ))}
+            </group>
+          )}
+
+          {/* Individual Property Perimeter Fence with Pedestrian Gate & Driveway Opening */}
+          <group position={[0, SIDEWALK_HEIGHT, 0]}>
+            <ResidentialFence
+              plotWidth={width}
+              plotDepth={depth}
+              archetype={house?.archetype ?? null}
+              trimColor={house?.trimColor}
+              accentColor={house?.accentColor}
+              inset={0.28}
+              frontOpenings={[
+                { centerX: pathX, width: 2.7, hasGateLeaves: true },
+                { centerX: drivewayX, width: 3.5, hasGateLeaves: false },
+              ]}
+            />
+          </group>
+
+          {/* Plot Nameplate Sign positioned cleanly beside Front Gate Pillar */}
           <PlotNameplateSign
-            position={[houseLocalX - 2.0, SIDEWALK_HEIGHT, halfD - 0.95]}
+            position={[pathX - 2.35, SIDEWALK_HEIGHT, halfD - 0.04]}
             plotCode={plot.plotCode}
             ownerUsername={plot.ownerUsername}
           />
+
+          {/* Parked Car cleanly on Driveway in front of Garage */}
+          {house && (
+            <group position={[drivewayX, SIDEWALK_HEIGHT + 0.024, carZ]} scale={0.9}>
+              <CarMesh
+                color={carColors[carHash % carColors.length]}
+                style={carStyles[carHash % carStyles.length]}
+                timeOfDay={timeOfDay}
+              />
+            </group>
+          )}
+
+          {/* Front Lawn Landscaped Flowerbed Strip */}
+          {house && (
+            <group position={[Math.max(-halfW + 2.1, pathX - 3.1), SIDEWALK_HEIGHT, halfD - 1.55]}>
+              <mesh position={[0, 0.08, 0]} receiveShadow>
+                <boxGeometry args={[2.5, 0.16, 0.92]} />
+                <meshStandardMaterial color="#4e3727" roughness={0.94} />
+              </mesh>
+              {[-0.75, 0, 0.75].map((bx, bi) => (
+                <group key={`fb-${bi}`} position={[bx, 0.22, 0]}>
+                  <mesh castShadow>
+                    <dodecahedronGeometry args={[0.26, 0]} />
+                    <meshStandardMaterial color={bi === 1 ? '#3b7338' : '#4a8543'} roughness={0.88} />
+                  </mesh>
+                  <mesh position={[0.08, 0.16, 0.08]}>
+                    <sphereGeometry args={[0.09, 6, 6]} />
+                    <meshStandardMaterial
+                      color={bi === 0 ? '#f43f5e' : bi === 1 ? '#fbbf24' : '#ec4899'}
+                      roughness={0.75}
+                    />
+                  </mesh>
+                </group>
+              ))}
+            </group>
+          )}
         </>
       )}
 
@@ -213,16 +358,18 @@ const SinglePlot: React.FC<SinglePlotProps> = React.memo(({
         </group>
       )}
 
-      {/* Garden Trees */}
-      {gardenTrees.map((tree, i) => (
-        <StylizedTree
-          key={`gt-${i}`}
-          position={[tree.x, SIDEWALK_HEIGHT, tree.z]}
-          scale={tree.scale}
-          variant={tree.variant}
-          rotationY={i * 1.4}
-        />
-      ))}
+      {/* Garden Trees (filtered for safe clearance from driveways, walkways, house & pool) */}
+      {gardenTrees
+        .filter((tree) => isPlotGardenTreeSafe(plot, tree.x, tree.z))
+        .map((tree, i) => (
+          <StylizedTree
+            key={`gt-${i}`}
+            position={[tree.x, SIDEWALK_HEIGHT, tree.z]}
+            scale={tree.scale}
+            variant={tree.variant}
+            rotationY={i * 1.4}
+          />
+        ))}
 
       {/* Built House, Business, Public Landmark OR Empty Plot Survey Stakes */}
       {house ? (
@@ -232,6 +379,7 @@ const SinglePlot: React.FC<SinglePlotProps> = React.memo(({
             textures={textures}
             timeOfDay={timeOfDay}
             doorOpen={doorOpen}
+            houseNumber={plot.plotCode}
           />
         </group>
       ) : business ? (

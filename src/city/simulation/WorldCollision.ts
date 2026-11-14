@@ -143,8 +143,8 @@ export function getSurfaceElevationAt(
     return SIDEWALK_HEIGHT + 0.42;
   }
 
-  // Core asphalt road corridors (X = ±26 / ±78, Z = ±26 / ±78)
-  const inCore = Math.abs(x) <= 138 && Math.abs(z) <= 128;
+  // Core asphalt road corridors (X = ±26 / ±78 / ±130, Z = ±26 / ±78 / +128)
+  const inCore = x >= -276 && x <= 142 && z >= -118 && z <= 140;
   if (inCore) {
     const onMainRoad =
       Math.abs(x - 26) < 5.25 ||
@@ -154,8 +154,13 @@ export function getSurfaceElevationAt(
     const onSideRoad =
       Math.abs(x - 78) < 4.5 ||
       Math.abs(x + 78) < 4.5 ||
+      Math.abs(x - 130) < 4.5 ||
+      Math.abs(x + 130) < 4.5 ||
+      Math.abs(x + 182) < 4.5 ||
+      Math.abs(x + 234) < 4.5 ||
       Math.abs(z - 78) < 4.5 ||
-      Math.abs(z + 78) < 4.5;
+      Math.abs(z + 78) < 4.5 ||
+      Math.abs(z - 128) < 4.5;
 
     if (onMainRoad || onSideRoad) {
       if (Math.hypot(x + 26, z) < 3.6 || Math.hypot(x - 26, z) < 3.6) {
@@ -164,7 +169,7 @@ export function getSurfaceElevationAt(
       return ROAD_SURFACE_Y;
     }
 
-    if (x >= -106 && x <= 106 && z >= -74 && z <= 74) {
+    if (x >= -272 && x <= 125 && z >= -106 && z <= 123.5) {
       return SIDEWALK_HEIGHT;
     }
   }
@@ -196,10 +201,21 @@ export function getSurfaceElevationAt(
       return SIDEWALK_HEIGHT + 0.42;
     }
 
-    // Curved Panoramic Ring Boulevard
-    const ellipR = Math.hypot(x / 1085, z / 815);
+    // Curved Panoramic Ring Boulevard + Scenic Curvy Parkways
+    const ellipR = Math.hypot(x / 1175, z / 890);
     if (Math.abs(ellipR - 1) <= 0.011) {
       return ROAD_SURFACE_Y;
+    }
+    for (const r of expansionWorld.curvyRoadSegments) {
+      const dx = r.x2 - r.x1;
+      const dz = r.z2 - r.z1;
+      const lenSq = dx * dx + dz * dz;
+      if (lenSq <= 0) continue;
+      const t = Math.max(0, Math.min(1, ((x - r.x1) * dx + (z - r.z1) * dz) / lenSq));
+      const d = Math.hypot(x - (r.x1 + t * dx), z - (r.z1 + t * dz));
+      if (d <= r.width / 2 + 0.45) {
+        return ROAD_SURFACE_Y;
+      }
     }
 
     // Named Primary Boulevards & OG Avenues
@@ -222,6 +238,11 @@ export function getSurfaceElevationAt(
 
     if (onBoulevard) {
       return ROAD_SURFACE_Y;
+    }
+
+    // Royal Helipad Raised Pad at (0, -303)
+    if (Math.hypot(x, z + 303) <= 10.8) {
+      return SIDEWALK_HEIGHT + 0.22;
     }
 
     // Grand Central Park + Waterfront Pads + OG District + Royal Crescent Garden
@@ -268,10 +289,10 @@ export function resolvePlayerMovement(
   playerRadius = 0.36,
   expansionWorld?: ExpansionCityWorld | null,
 ): { x: number; z: number } {
-  const minX = expansionWorld ? -1120 : -124;
-  const maxX = expansionWorld ? 1120 : 124;
-  const minZ = expansionWorld ? -840 : -124;
-  const maxZ = expansionWorld ? 840 : 124;
+  const minX = expansionWorld ? -1240 : -124;
+  const maxX = expansionWorld ? 1240 : 124;
+  const minZ = expansionWorld ? -920 : -124;
+  const maxZ = expansionWorld ? 920 : 124;
   let x = Math.max(minX, Math.min(maxX, targetX));
   let z = Math.max(minZ, Math.min(maxZ, targetZ));
 
@@ -347,44 +368,70 @@ export function resolvePlayerMovement(
         }
       }
 
-      // Residential & Luxury Side Hedges + Rear Wooden Fence (front remains open for porch access)
+      // Residential & Luxury Individual Perimeter Fences & Parked Driveway Cars
       if (
         plot.category === 'residential' ||
         plot.category === 'luxury-residential' ||
         plot.category === 'expansion-residential'
       ) {
-        const leftH = toWorld(-halfW + 0.28, 0);
-        let res = pushOutOrientedBox(x, z, playerRadius, {
-          cx: leftH.cx,
-          cz: leftH.cz,
-          hx: 0.28,
-          hz: halfD - 0.4,
-          rotY: -plot.facingAngle,
-        });
-        x = res.x;
-        z = res.z;
+        const inset = 0.28;
+        const fw = halfW - inset;
+        const fd = halfD - inset;
+        const houseLocalX = plot.house ? (plot.house.hasGarageCarport ? -0.8 : -0.4) : 0;
+        const pathX = plot.house ? houseLocalX : 0;
+        const drivewayX = plot.house?.hasGarageCarport
+          ? Math.min(halfW - 2.15, houseLocalX + plot.house.width / 2 + 1.45)
+          : halfW - 2.65;
 
-        const rightH = toWorld(halfW - 0.28, 0);
-        res = pushOutOrientedBox(x, z, playerRadius, {
-          cx: rightH.cx,
-          cz: rightH.cz,
-          hx: 0.28,
-          hz: halfD - 0.4,
-          rotY: -plot.facingAngle,
-        });
-        x = res.x;
-        z = res.z;
+        if (plot.house) {
+          const carZ = Math.min(halfD - 2.45, Math.max(-1.2 + plot.house.depth / 2 + 2.35, halfD - 3.9));
+          const carWorld = toWorld(drivewayX, carZ);
+          const carRes = pushOutOrientedBox(x, z, playerRadius, {
+            cx: carWorld.cx,
+            cz: carWorld.cz,
+            hx: 0.92,
+            hz: 1.98,
+            rotY: -plot.facingAngle,
+          });
+          x = carRes.x;
+          z = carRes.z;
+        }
 
-        const rearF = toWorld(0, -halfD + 0.18);
-        res = pushOutOrientedBox(x, z, playerRadius, {
-          cx: rearF.cx,
-          cz: rearF.cz,
-          hx: halfW - 0.4,
-          hz: 0.16,
-          rotY: -plot.facingAngle,
-        });
-        x = res.x;
-        z = res.z;
+        const fenceBox = (cxLocal: number, czLocal: number, hx: number, hz: number) => {
+          const w = toWorld(cxLocal, czLocal);
+          const pushed = pushOutOrientedBox(x, z, playerRadius, {
+            cx: w.cx,
+            cz: w.cz,
+            hx,
+            hz,
+            rotY: -plot.facingAngle,
+          });
+          x = pushed.x;
+          z = pushed.z;
+        };
+
+        // Left, Right & Rear boundaries
+        fenceBox(-fw, 0, 0.14, fd);
+        fenceBox(fw, 0, 0.14, fd);
+        fenceBox(0, -fd, fw, 0.14);
+
+        // Front boundary segments split cleanly around Pedestrian Gate [pathX ± 1.35] & Driveway [drivewayX ± 1.75]
+        const openings = [
+          { start: pathX - 1.35, end: pathX + 1.35 },
+          { start: drivewayX - 1.75, end: drivewayX + 1.75 },
+        ].sort((a, b) => a.start - b.start);
+
+        let cursor = -fw;
+        for (const op of openings) {
+          const segEnd = Math.min(fw, op.start);
+          if (segEnd - cursor > 0.2) {
+            fenceBox((cursor + segEnd) / 2, fd, (segEnd - cursor) / 2, 0.14);
+          }
+          cursor = Math.max(cursor, op.end);
+        }
+        if (fw - cursor > 0.2) {
+          fenceBox((cursor + fw) / 2, fd, (fw - cursor) / 2, 0.14);
+        }
       }
     }
 
@@ -405,7 +452,7 @@ export function resolvePlayerMovement(
     // 3. Fountains & Roundabout Islands
     const circles: Circle2D[] = [
       { cx: 0, cz: 8.8, r: 3.3 },
-      { cx: 42.2, cz: -1.0, r: 2.6 },
+      { cx: 42.2, cz: -1.0, r: 3.15 },
       { cx: -26, cz: 0, r: 3.1 },
       { cx: 26, cz: 0, r: 3.1 },
     ];
@@ -414,6 +461,34 @@ export function resolvePlayerMovement(
       const res = pushOutCircle(x, z, playerRadius, c);
       x = res.x;
       z = res.z;
+    }
+
+    // 3b. District 3 Central Park Playgrounds A & B + Shaded Picnic Tables
+    if (x >= 34 && x <= 71 && z >= 0 && z <= 18) {
+      const parkObstacles: Box2D[] = [
+        // Playground A (41.5, 10.6, scale 0.94): Play Tower & Swing Frame
+        { cx: 42.72, cz: 9.85, hx: 1.0, hz: 1.0, rotY: 0 },
+        { cx: 39.24, cz: 10.79, hx: 1.35, hz: 0.72, rotY: 0 },
+        // Playground B (60.5, 11.4, scale 0.92): Slide Platform, Swings & Playhouse
+        { cx: 58.48, cz: 9.93, hx: 1.3, hz: 1.05, rotY: 0 },
+        { cx: 63.08, cz: 9.74, hx: 1.3, hz: 0.72, rotY: 0 },
+        { cx: 57.83, cz: 13.33, hx: 0.95, hz: 0.85, rotY: 0 },
+        // Shaded Picnic Sets
+        { cx: 59.2, cz: 2.6, hx: 0.98, hz: 0.88, rotY: 0 },
+        { cx: 63.8, cz: 2.6, hx: 0.98, hz: 0.88, rotY: -Math.PI / 6 },
+      ];
+      for (const box of parkObstacles) {
+        if (Math.abs(x - box.cx) > 4 || Math.abs(z - box.cz) > 4) continue;
+        const res = pushOutOrientedBox(x, z, playerRadius, box);
+        x = res.x;
+        z = res.z;
+      }
+      // Playground B Climbing Dome
+      if (Math.abs(x - 60.59) < 3 && Math.abs(z - 13.24) < 3) {
+        const res = pushOutCircle(x, z, playerRadius, { cx: 60.59, cz: 13.24, r: 1.12 });
+        x = res.x;
+        z = res.z;
+      }
     }
 
     // 4. Park Lake Basin (keep footbridge corridor X in [56.9, 59.1] walkable!)
@@ -533,6 +608,40 @@ export function resolvePlayerMovement(
         z = res.z;
       }
 
+      // Grand Central Park Fountain Plaza, Playgrounds A & B, Picnic Groves & Parterres
+      if (x >= 152 && x <= 320 && Math.abs(z) <= 122) {
+        if (Math.abs(x - 236) < 7 && Math.abs(z - 34) < 7) {
+          const res = pushOutCircle(x, z, playerRadius, { cx: 236, cz: 34, r: 4.35 });
+          x = res.x;
+          z = res.z;
+        }
+        const grandParkBoxes: Box2D[] = [
+          // Playground Alpha at (192, 24, scale 1.32)
+          { cx: 193.72, cz: 22.94, hx: 1.4, hz: 1.4, rotY: 0 },
+          { cx: 188.83, cz: 24.26, hx: 1.8, hz: 0.95, rotY: 0 },
+          // Playground Beta at (280, 24, scale 1.32)
+          { cx: 277.1, cz: 21.89, hx: 1.8, hz: 1.5, rotY: 0 },
+          { cx: 283.7, cz: 21.62, hx: 1.8, hz: 0.95, rotY: 0 },
+          { cx: 276.17, cz: 26.77, hx: 1.25, hz: 1.1, rotY: 0 },
+          // Picnic Groves at (192, -24) and (280, -24)
+          { cx: 189, cz: -24, hx: 1.0, hz: 0.88, rotY: 0 },
+          { cx: 195, cz: -24, hx: 1.0, hz: 0.88, rotY: -Math.PI / 8 },
+          { cx: 277, cz: -24, hx: 1.0, hz: 0.88, rotY: 0 },
+          { cx: 283, cz: -24, hx: 1.0, hz: 0.88, rotY: -Math.PI / 8 },
+        ];
+        for (const box of grandParkBoxes) {
+          if (Math.abs(x - box.cx) > 5 || Math.abs(z - box.cz) > 5) continue;
+          const res = pushOutOrientedBox(x, z, playerRadius, box);
+          x = res.x;
+          z = res.z;
+        }
+        if (Math.abs(x - 280.13) < 4 && Math.abs(z - 26.64) < 4) {
+          const res = pushOutCircle(x, z, playerRadius, { cx: 280.13, cz: 26.64, r: 1.55 });
+          x = res.x;
+          z = res.z;
+        }
+      }
+
       // Venice Canal Waterways (keep all 35 bridges completely walkable!)
       if (!isOnBridge(x, z, expansionWorld).onBridge) {
         for (const c of expansionWorld.canals) {
@@ -552,9 +661,20 @@ export function resolvePlayerMovement(
         }
       }
 
-      // Royal Crescent Garden Fountain at (0, -284)
-      if (Math.abs(x) < 6 && Math.abs(z + 284) < 6) {
-        const res = pushOutCircle(x, z, playerRadius, { cx: 0, cz: -284, r: 3.3 });
+      // Royal Crescent Garden Fountain at (0, -264) & VIP Helicopter on Helipad at (0, -303)
+      if (Math.abs(x) < 6 && Math.abs(z + 264) < 6) {
+        const res = pushOutCircle(x, z, playerRadius, { cx: 0, cz: -264, r: 3.3 });
+        x = res.x;
+        z = res.z;
+      }
+      if (Math.abs(x) < 7 && Math.abs(z + 303) < 8) {
+        const res = pushOutOrientedBox(x, z, playerRadius, {
+          cx: 0,
+          cz: -303,
+          hx: 1.5,
+          hz: 3.2,
+          rotY: -0.35,
+        });
         x = res.x;
         z = res.z;
       }
@@ -651,21 +771,67 @@ export function resolvePlayerMovement(
             hz: 0.4,
             rotY: 0,
           });
+          // Royal Estate Perimeter Fence (9.2m front ceremonial gate remains open)
+          for (const [fx, fz, hx, hz] of [
+            [-23.72, 0, 0.15, 19.72],
+            [23.72, 0, 0.15, 19.72],
+            [0, -19.72, 23.72, 0.15],
+            [-14.16, 19.72, 9.56, 0.15],
+            [14.16, 19.72, 9.56, 0.15],
+          ]) {
+            res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+              cx: ep.x + fx,
+              cz: ep.z + fz,
+              hx,
+              hz,
+              rotY: 0,
+            });
+          }
           x = res.x;
           z = res.z;
         } else if (ep.houseStyle) {
           const sin = Math.sin(ep.facingAngle);
           const cos = Math.cos(ep.facingAngle);
-          const localZ = -1.1;
-          const hx = ep.x + localZ * sin;
-          const hz = ep.z + localZ * cos;
-          const res = pushOutOrientedBox(x, z, playerRadius, {
-            cx: hx,
-            cz: hz,
+          const toWorld = (lx: number, lz: number) => ({
+            cx: ep.x + lx * cos + lz * sin,
+            cz: ep.z - lx * sin + lz * cos,
+          });
+
+          const hPos = toWorld(0, -1.1);
+          let res = pushOutOrientedBox(x, z, playerRadius, {
+            cx: hPos.cx,
+            cz: hPos.cz,
             hx: ep.houseStyle.width / 2 + 0.18,
             hz: ep.houseStyle.depth / 2 + 0.18,
             rotY: -ep.facingAngle,
           });
+
+          // Individual Perimeter Fence Segments (front entrance gate stays cleanly walkable)
+          const isOg = ep.status === 'og';
+          const inset = isOg ? 0.34 : 0.2;
+          const fw = ep.width / 2 - inset;
+          const fd = ep.depth / 2 - inset;
+          const gateHalf = isOg ? 1.85 : 1.4;
+          const frontWingLen = Math.max(0.2, fw - gateHalf);
+          const frontWingMid = (fw + gateHalf) / 2;
+
+          for (const [lx, lz, hx, hz] of [
+            [-fw, 0, 0.13, fd],
+            [fw, 0, 0.13, fd],
+            [0, -fd, fw, 0.13],
+            [-frontWingMid, fd, frontWingLen / 2, 0.13],
+            [frontWingMid, fd, frontWingLen / 2, 0.13],
+          ]) {
+            const w = toWorld(lx, lz);
+            res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+              cx: w.cx,
+              cz: w.cz,
+              hx,
+              hz,
+              rotY: -ep.facingAngle,
+            });
+          }
+
           x = res.x;
           z = res.z;
         }

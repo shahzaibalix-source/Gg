@@ -19,6 +19,12 @@ export const ARCHETYPE_LABELS: Record<HouseArchetype, string> = {
   mediterranean: 'Mediterranean Villa',
   'luxury-mansion': 'Luxury European Mansion',
   'luxury-modern': 'Luxury Modern Estate',
+  'modern-family': 'Small Modern Family House',
+  'suburban-two-storey': 'Two-Storey Suburban Home',
+  'contemporary-villa': 'Contemporary Villa',
+  'traditional-home': 'Traditional Residential Home',
+  'modern-minimalist': 'Modern Minimalist House',
+  'premium-residence': 'Premium Residential Property',
 };
 
 export const BUSINESS_LABELS: Record<BusinessCategory, string> = {
@@ -161,6 +167,104 @@ export const HOUSE_PRESETS: Record<HouseArchetype, HouseStyleSpec> = {
     depth: 8.5,
     wallHeight: 6.5,
   },
+  'modern-family': {
+    archetype: 'modern-family',
+    wallColor: '#f1ece1',
+    trimColor: '#343a42',
+    roofColor: '#3c434d',
+    accentColor: '#a6764c',
+    shutterColor: '#445a68',
+    hasBalcony: false,
+    hasChimney: false,
+    hasDormers: false,
+    hasGarageCarport: true,
+    floors: 1,
+    width: 8.4,
+    depth: 7.2,
+    wallHeight: 4.3,
+  },
+  'suburban-two-storey': {
+    archetype: 'suburban-two-storey',
+    wallColor: '#e8dfd0',
+    trimColor: '#f4f0e6',
+    roofColor: '#47505c',
+    accentColor: '#7a5a42',
+    shutterColor: '#395249',
+    hasBalcony: true,
+    hasChimney: true,
+    hasDormers: true,
+    hasGarageCarport: true,
+    floors: 2,
+    width: 9.2,
+    depth: 7.8,
+    wallHeight: 5.9,
+  },
+  'contemporary-villa': {
+    archetype: 'contemporary-villa',
+    wallColor: '#f4f3ef',
+    trimColor: '#272c33',
+    roofColor: '#2b3038',
+    accentColor: '#b28354',
+    shutterColor: '#2b3038',
+    hasBalcony: true,
+    hasChimney: false,
+    hasDormers: false,
+    hasGarageCarport: true,
+    hasPool: false,
+    floors: 2,
+    width: 9.8,
+    depth: 8.2,
+    wallHeight: 6.2,
+  },
+  'traditional-home': {
+    archetype: 'traditional-home',
+    wallColor: '#eadbc4',
+    trimColor: '#f2ece1',
+    roofColor: '#9b4a33',
+    accentColor: '#6d4b34',
+    shutterColor: '#3b5946',
+    hasBalcony: false,
+    hasChimney: true,
+    hasDormers: true,
+    hasGarageCarport: true,
+    floors: 2,
+    width: 8.8,
+    depth: 7.6,
+    wallHeight: 5.4,
+  },
+  'modern-minimalist': {
+    archetype: 'modern-minimalist',
+    wallColor: '#e9ebed',
+    trimColor: '#232830',
+    roofColor: '#2c323b',
+    accentColor: '#98724e',
+    shutterColor: '#232830',
+    hasBalcony: true,
+    hasChimney: false,
+    hasDormers: false,
+    hasGarageCarport: true,
+    floors: 2,
+    width: 8.9,
+    depth: 7.5,
+    wallHeight: 5.6,
+  },
+  'premium-residence': {
+    archetype: 'premium-residence',
+    wallColor: '#f5ede0',
+    trimColor: '#dfd4be',
+    roofColor: '#373e48',
+    accentColor: '#8d653e',
+    shutterColor: '#2f4941',
+    hasBalcony: true,
+    hasChimney: true,
+    hasDormers: true,
+    hasGarageCarport: true,
+    hasPool: true,
+    floors: 2,
+    width: 10.6,
+    depth: 8.2,
+    wallHeight: 6.5,
+  },
 };
 
 export function createBusinessPreset(
@@ -257,6 +361,7 @@ export class CityRegistry {
   private districts: Map<string, DistrictChunk> = new Map();
   private plots: Map<string, TownPlot> = new Map();
   private basePlots: Map<string, TownPlot> = new Map();
+  private lastOverrides: Record<string, TownPlotOverridePayload> = {};
   private spatialIndex: Map<string, string[]> = new Map();
   private treasuryBalance: number = 42500;
   private readonly chunkSize = 120;
@@ -276,7 +381,21 @@ export class CityRegistry {
     this.treasuryBalance = balance;
   }
 
+  public syncPlannedPlots(plannedPlots: TownPlot[]): void {
+    this.basePlots.clear();
+    this.plots.clear();
+    this.spatialIndex.clear();
+    for (const base of plannedPlots) {
+      this.basePlots.set(base.id, base);
+      this.registerPlot(base);
+    }
+    if (Object.keys(this.lastOverrides).length > 0) {
+      this.applyRemoteOverrides(this.lastOverrides);
+    }
+  }
+
   public applyRemoteOverrides(overrides: Record<string, TownPlotOverridePayload>): void {
+    this.lastOverrides = overrides;
     for (const [id, base] of this.basePlots.entries()) {
       const ov = overrides[id];
       if (!ov) {

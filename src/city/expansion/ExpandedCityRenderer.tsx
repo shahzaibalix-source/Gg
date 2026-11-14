@@ -4,6 +4,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { CityTextureSet } from '../materials/proceduralTextures';
 import { HouseModel } from '../assets/HouseModel';
 import { PlotNameplateSign } from '../assets/FoliageAndProps';
+import { CarMesh } from '../assets/VehicleModels';
 import { ROAD_SURFACE_Y, SIDEWALK_HEIGHT } from '../world/MasterTownBlueprint';
 import { CameraMode, TimeOfDay } from '../types';
 import { ExpansionCityWorld, queryNearbyExpansionPlots } from './ExpansionMasterPlan';
@@ -14,9 +15,19 @@ import { BotanicalAndWaterfront } from './BotanicalAndWaterfront';
 import { VeniceCanalsAndParksRenderer } from './VeniceCanalsAndParksRenderer';
 import { PlayerPoseState } from '../player/WalkingPlayerController';
 import {
+  filterWithMinSpacing,
+  isClearOfExpansionInfra,
+  isExpansionPlotTreeSafe,
+} from '../world/TreePlacementValidator';
+import {
   createHdBroadleafCrownGeo,
   createHdTrunkGeo,
 } from '../materials/realisticNature';
+import {
+  INSTANCED_BAY_UNIT_LEN,
+  createUnitFenceBayGeometries,
+  getFenceStyleForArchetype,
+} from '../assets/ResidentialFence';
 
 interface ExpandedCityRendererProps {
   world: ExpansionCityWorld;
@@ -44,13 +55,25 @@ function getSectorKey(x: number, z: number): string {
 function getHouseOrigin(plot: ExpansionPlotSpec): { hx: number; hz: number; doorZ: number } {
   const sin = Math.sin(plot.facingAngle);
   const cos = Math.cos(plot.facingAngle);
+  const localX = plot.houseStyle?.hasGarageCarport && plot.status !== 'og' ? -0.9 : 0;
   const localZ = -1.1;
   const doorLocalZ = plot.depth / 2 - 0.95;
   return {
-    hx: plot.x + localZ * sin,
-    hz: plot.z + localZ * cos,
+    hx: plot.x + localX * cos + localZ * sin,
+    hz: plot.z - localX * sin + localZ * cos,
     doorZ: doorLocalZ,
   };
+}
+
+interface FenceTransformSpec {
+  x: number;
+  y: number;
+  z: number;
+  rotY: number;
+  sx: number;
+  sy: number;
+  sz: number;
+  color: string;
 }
 
 interface SectorBucket {
@@ -80,10 +103,17 @@ interface SharedSectorResources {
   signBoardGeo: THREE.BoxGeometry;
   trunkGeo: THREE.BufferGeometry;
   canopyGeo: THREE.BufferGeometry;
+  fenceHeritageBayGeo: THREE.BufferGeometry;
+  fenceModernBayGeo: THREE.BufferGeometry;
+  fenceTimberBayGeo: THREE.BufferGeometry;
   sidewalkMat: THREE.MeshStandardMaterial;
   lampPoleMat: THREE.MeshStandardMaterial;
   padMat: THREE.MeshStandardMaterial;
   drivewayMat: THREE.MeshStandardMaterial;
+  curbMat: THREE.MeshStandardMaterial;
+  fencePlinthMat: THREE.MeshStandardMaterial;
+  fenceBayMat: THREE.MeshStandardMaterial;
+  fencePillarMat: THREE.MeshStandardMaterial;
   wallMat: THREE.MeshStandardMaterial;
   pitchedRoofMat: THREE.MeshStandardMaterial;
   flatRoofMat: THREE.MeshStandardMaterial;
@@ -108,6 +138,14 @@ const ExpansionSectorChunk: React.FC<{
   const lampGlobeMeshRef = useRef<THREE.InstancedMesh>(null);
   const padMeshRef = useRef<THREE.InstancedMesh>(null);
   const drivewayMeshRef = useRef<THREE.InstancedMesh>(null);
+  const curbMeshRef = useRef<THREE.InstancedMesh>(null);
+  const fencePlinthMeshRef = useRef<THREE.InstancedMesh>(null);
+  const fenceHeritageMeshRef = useRef<THREE.InstancedMesh>(null);
+  const fenceModernMeshRef = useRef<THREE.InstancedMesh>(null);
+  const fenceTimberMeshRef = useRef<THREE.InstancedMesh>(null);
+  const fencePillarMeshRef = useRef<THREE.InstancedMesh>(null);
+  const fenceCapMeshRef = useRef<THREE.InstancedMesh>(null);
+  const fenceGateMeshRef = useRef<THREE.InstancedMesh>(null);
   const wallMeshRef = useRef<THREE.InstancedMesh>(null);
   const pitchedRoofMeshRef = useRef<THREE.InstancedMesh>(null);
   const flatRoofMeshRef = useRef<THREE.InstancedMesh>(null);
@@ -120,6 +158,188 @@ const ExpansionSectorChunk: React.FC<{
   const canopyMeshRef = useRef<THREE.InstancedMesh>(null);
 
   const suppressedIdsRef = useRef<Set<string>>(new Set());
+
+  // Precompute all individual fence segments, pillars, open gate leaves & pathway curbs for this sector
+  const fenceLayout = useMemo(() => {
+    const curbs: FenceTransformSpec[] = [];
+    const plinths: FenceTransformSpec[] = [];
+    const heritageBays: FenceTransformSpec[] = [];
+    const modernBays: FenceTransformSpec[] = [];
+    const timberBays: FenceTransformSpec[] = [];
+    const pillars: FenceTransformSpec[] = [];
+    const caps: FenceTransformSpec[] = [];
+    const gates: FenceTransformSpec[] = [];
+
+    for (const p of sector.housePlots) {
+      const s = p.houseStyle!;
+      const isOg = p.status === 'og';
+      const sin = Math.sin(p.facingAngle);
+      const cos = Math.cos(p.facingAngle);
+      const toWorld = (lx: number, lz: number) => ({
+        wx: p.x + lx * cos + lz * sin,
+        wz: p.z - lx * sin + lz * cos,
+      });
+
+      const halfD = p.depth / 2;
+      const pathW = isOg ? 3.4 : 2.5;
+      const gateHalf = isOg ? 1.85 : 1.4;
+      const inset = isOg ? 0.34 : 0.2;
+      const fw = p.width / 2 - inset;
+      const fd = halfD - inset;
+
+      // Pathway border curbs flanking the widened walkway inside the property
+      const curbStartZ = Math.max(0.5, -1.1 + s.depth / 2 - 0.15);
+      const curbEndZ = halfD - 0.04;
+      const curbLen = Math.max(1.2, curbEndZ - curbStartZ);
+      const curbCenterZ = (curbStartZ + curbEndZ) / 2;
+      for (const side of [-1, 1]) {
+        const { wx, wz } = toWorld(side * (pathW / 2 + 0.06), curbCenterZ);
+        curbs.push({
+          x: wx,
+          y: SIDEWALK_HEIGHT + 0.02,
+          z: wz,
+          rotY: p.facingAngle,
+          sx: 0.12,
+          sy: 0.04,
+          sz: curbLen,
+          color: '#b7afa1',
+        });
+      }
+
+      const style = getFenceStyleForArchetype(s.archetype);
+      const plinthColor =
+        s.archetype === 'luxury-modern' ? '#434952' : isOg ? '#ddd5c6' : '#d2cbc0';
+      const plinthH = style === 'heritage-iron' ? 0.28 : style === 'modern-slat' ? 0.24 : 0.18;
+      const bayColor =
+        style === 'heritage-iron'
+          ? '#232830'
+          : style === 'modern-slat'
+            ? s.archetype === 'luxury-modern'
+              ? '#2e343d'
+              : s.accentColor
+            : s.accentColor;
+      const pillarColor =
+        style === 'modern-slat'
+          ? s.trimColor || '#2f353d'
+          : s.trimColor && s.trimColor !== '#32373e'
+            ? s.trimColor
+            : '#ded7c9';
+      const capColor = isOg ? '#d4af37' : '#b7afa1';
+
+      const pillarOffset = 0.13;
+      const gatePillarX = gateHalf + pillarOffset;
+      const runs: Array<[number, number, number, number]> = [
+        [-fw, -fd, -fw, fd], // Left boundary
+        [fw, -fd, fw, fd], // Right boundary
+        [-fw, -fd, fw, -fd], // Rear boundary
+        [-fw, fd, -gatePillarX, fd], // Front-left wing
+        [gatePillarX, fd, fw, fd], // Front-right wing
+      ];
+
+      const targetBayList =
+        style === 'heritage-iron'
+          ? heritageBays
+          : style === 'modern-slat'
+            ? modernBays
+            : timberBays;
+
+      for (const [x1, z1, x2, z2] of runs) {
+        const dx = x2 - x1;
+        const dz = z2 - z1;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.2) continue;
+        const runRotY = p.facingAngle + Math.atan2(-dz, dx);
+        const mid = toWorld((x1 + x2) / 2, (z1 + z2) / 2);
+
+        plinths.push({
+          x: mid.wx,
+          y: SIDEWALK_HEIGHT + plinthH / 2,
+          z: mid.wz,
+          rotY: runRotY,
+          sx: len,
+          sy: plinthH,
+          sz: 0.15,
+          color: plinthColor,
+        });
+
+        const bayCount = Math.max(1, Math.round(len / INSTANCED_BAY_UNIT_LEN));
+        const bayLen = len / bayCount;
+        const bayScaleX = bayLen / INSTANCED_BAY_UNIT_LEN;
+
+        for (let b = 0; b < bayCount; b++) {
+          const t = (b + 0.5) / bayCount;
+          const bx = x1 + dx * t;
+          const bz = z1 + dz * t;
+          const bw = toWorld(bx, bz);
+          targetBayList.push({
+            x: bw.wx,
+            y: SIDEWALK_HEIGHT,
+            z: bw.wz,
+            rotY: runRotY,
+            sx: bayScaleX,
+            sy: 1,
+            sz: 1,
+            color: bayColor,
+          });
+        }
+      }
+
+      // 4 Corner Posts + 2 Taller Entrance Gate Pillars
+      const postSpecs: Array<[number, number, number, number]> = [
+        [-fw, -fd, 0.18, 1.14],
+        [fw, -fd, 0.18, 1.14],
+        [-fw, fd, 0.18, 1.14],
+        [fw, fd, 0.18, 1.14],
+        [-gatePillarX, fd, 0.25, 1.32],
+        [gatePillarX, fd, 0.25, 1.32],
+      ];
+      for (const [px, pz, pw, ph] of postSpecs) {
+        const pwWorld = toWorld(px, pz);
+        pillars.push({
+          x: pwWorld.wx,
+          y: SIDEWALK_HEIGHT + ph / 2,
+          z: pwWorld.wz,
+          rotY: p.facingAngle,
+          sx: pw,
+          sy: ph,
+          sz: pw,
+          color: pillarColor,
+        });
+        caps.push({
+          x: pwWorld.wx,
+          y: SIDEWALK_HEIGHT + ph + 0.035,
+          z: pwWorld.wz,
+          rotY: p.facingAngle,
+          sx: pw + 0.07,
+          sy: 0.07,
+          sz: pw + 0.07,
+          color: capColor,
+        });
+      }
+
+      // Twin open/ajar entrance gate leaves tucked neatly beside walkway (zero path blocking)
+      const leafLen = isOg ? 1.15 : 0.95;
+      for (const side of [-1, 1]) {
+        const hingeX = side * gateHalf;
+        const angle = side < 0 ? 1.5 : -1.5;
+        const leafCenterLocalX = hingeX + (side < 0 ? 0.0707 : -0.0707) * (leafLen / 2);
+        const leafCenterLocalZ = fd - 0.9975 * (leafLen / 2);
+        const lw = toWorld(leafCenterLocalX, leafCenterLocalZ);
+        gates.push({
+          x: lw.wx,
+          y: SIDEWALK_HEIGHT + 0.54,
+          z: lw.wz,
+          rotY: p.facingAngle + angle,
+          sx: leafLen,
+          sy: 0.84,
+          sz: 0.05,
+          color: style === 'heritage-iron' ? '#1f252d' : bayColor,
+        });
+      }
+    }
+
+    return { curbs, plinths, heritageBays, modernBays, timberBays, pillars, caps, gates };
+  }, [sector.housePlots]);
 
   // Populate all static geometry instances for this spatial sector
   useEffect(() => {
@@ -225,27 +445,33 @@ const ExpansionSectorChunk: React.FC<{
 
         const sin = Math.sin(p.facingAngle);
         const cos = Math.cos(p.facingAngle);
-        const sx = p.x - 2.0 * cos + doorZ * sin;
-        const sz = p.z + 2.0 * sin + doorZ * cos;
+        const isOg = p.status === 'og';
+        const signLocalX = isOg ? -2.95 : -2.42;
+        const signDoorZ = p.depth / 2 - (isOg ? 0.06 : 0.04);
+        const sx = p.x + signLocalX * cos + signDoorZ * sin;
+        const sz = p.z - signLocalX * sin + signDoorZ * cos;
         _dummy.position.set(sx, SIDEWALK_HEIGHT + 0.52, sz);
         _dummy.rotation.set(0, p.facingAngle, 0);
         _dummy.scale.set(1, 1, 1);
         _dummy.updateMatrix();
         signPostMeshRef.current!.setMatrixAt(i, _dummy.matrix);
-        _color.set(p.status === 'og' ? '#d4af37' : '#3a424d');
+        _color.set(isOg ? '#d4af37' : '#3a424d');
         signPostMeshRef.current!.setColorAt(i, _color);
 
-        // Front stone walkway & driveway apron linking porch to street sidewalk
+        // Wider front stone walkway linking porch through entrance gate all the way to street curb
         if (drivewayMeshRef.current) {
-          const pathLen = Math.max(2.2, (p.depth - s.depth) * 0.55);
-          const pathOffsetZ = s.depth / 2 + pathLen / 2 - 0.85;
+          const halfD = p.depth / 2;
+          const startZ = Math.max(0.5, -1.1 + s.depth / 2 - 0.15);
+          const endZ = halfD + (isOg ? 4.8 : 1.62);
+          const pathLen = Math.max(2.6, endZ - startZ);
+          const pathOffsetZ = (startZ + endZ) / 2;
           _dummy.position.set(
             p.x + pathOffsetZ * sin,
             SIDEWALK_HEIGHT + 0.015,
             p.z + pathOffsetZ * cos,
           );
           _dummy.rotation.set(0, p.facingAngle, 0);
-          _dummy.scale.set(p.status === 'og' ? 3.2 : 2.1, 0.03, pathLen);
+          _dummy.scale.set(isOg ? 3.4 : 2.5, 0.03, pathLen);
           _dummy.updateMatrix();
           drivewayMeshRef.current.setMatrixAt(i, _dummy.matrix);
         }
@@ -264,6 +490,38 @@ const ExpansionSectorChunk: React.FC<{
         drivewayMeshRef.current.computeBoundingSphere();
       }
     }
+
+    const populateInstancedGroup = (
+      mesh: THREE.InstancedMesh | null,
+      items: FenceTransformSpec[],
+      withColors = true,
+    ) => {
+      if (!mesh || items.length === 0) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        _dummy.position.set(item.x, item.y, item.z);
+        _dummy.rotation.set(0, item.rotY, 0);
+        _dummy.scale.set(item.sx, item.sy, item.sz);
+        _dummy.updateMatrix();
+        mesh.setMatrixAt(i, _dummy.matrix);
+        if (withColors) {
+          _color.set(item.color);
+          mesh.setColorAt(i, _color);
+        }
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (withColors && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.computeBoundingSphere();
+    };
+
+    populateInstancedGroup(curbMeshRef.current, fenceLayout.curbs, false);
+    populateInstancedGroup(fencePlinthMeshRef.current, fenceLayout.plinths);
+    populateInstancedGroup(fenceHeritageMeshRef.current, fenceLayout.heritageBays);
+    populateInstancedGroup(fenceModernMeshRef.current, fenceLayout.modernBays);
+    populateInstancedGroup(fenceTimberMeshRef.current, fenceLayout.timberBays);
+    populateInstancedGroup(fencePillarMeshRef.current, fenceLayout.pillars);
+    populateInstancedGroup(fenceCapMeshRef.current, fenceLayout.caps);
+    populateInstancedGroup(fenceGateMeshRef.current, fenceLayout.gates);
 
     if (pitchedRoofMeshRef.current) {
       sector.pitchedRoofPlots.forEach((p, i) => {
@@ -361,7 +619,7 @@ const ExpansionSectorChunk: React.FC<{
     }
 
     suppressedIdsRef.current.clear();
-  }, [sector]);
+  }, [sector, fenceLayout]);
 
   // Suppress coarse shells only for detailed LOD plots belonging to this sector
   useEffect(() => {
@@ -596,6 +854,72 @@ const ExpansionSectorChunk: React.FC<{
         </>
       )}
 
+      {fenceLayout.curbs.length > 0 && (
+        <instancedMesh
+          ref={curbMeshRef}
+          args={[res.unitBoxGeo, res.curbMat, fenceLayout.curbs.length]}
+          receiveShadow
+          frustumCulled
+        />
+      )}
+
+      {fenceLayout.plinths.length > 0 && (
+        <instancedMesh
+          ref={fencePlinthMeshRef}
+          args={[res.unitBoxGeo, res.fencePlinthMat, fenceLayout.plinths.length]}
+          receiveShadow
+          frustumCulled
+        />
+      )}
+
+      {fenceLayout.heritageBays.length > 0 && (
+        <instancedMesh
+          ref={fenceHeritageMeshRef}
+          args={[res.fenceHeritageBayGeo, res.fenceBayMat, fenceLayout.heritageBays.length]}
+          frustumCulled
+        />
+      )}
+
+      {fenceLayout.modernBays.length > 0 && (
+        <instancedMesh
+          ref={fenceModernMeshRef}
+          args={[res.fenceModernBayGeo, res.fenceBayMat, fenceLayout.modernBays.length]}
+          frustumCulled
+        />
+      )}
+
+      {fenceLayout.timberBays.length > 0 && (
+        <instancedMesh
+          ref={fenceTimberMeshRef}
+          args={[res.fenceTimberBayGeo, res.fenceBayMat, fenceLayout.timberBays.length]}
+          frustumCulled
+        />
+      )}
+
+      {fenceLayout.pillars.length > 0 && (
+        <instancedMesh
+          ref={fencePillarMeshRef}
+          args={[res.unitBoxGeo, res.fencePillarMat, fenceLayout.pillars.length]}
+          frustumCulled
+        />
+      )}
+
+      {fenceLayout.caps.length > 0 && (
+        <instancedMesh
+          ref={fenceCapMeshRef}
+          args={[res.unitBoxGeo, res.fencePillarMat, fenceLayout.caps.length]}
+          frustumCulled
+        />
+      )}
+
+      {fenceLayout.gates.length > 0 && (
+        <instancedMesh
+          ref={fenceGateMeshRef}
+          args={[res.unitBoxGeo, res.fenceBayMat, fenceLayout.gates.length]}
+          frustumCulled
+        />
+      )}
+
       {sector.treesData.length > 0 && (
         <>
           <instancedMesh
@@ -632,11 +956,105 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
   const roadLineMeshRef = useRef<THREE.InstancedMesh>(null);
   const dashedLineMeshRef = useRef<THREE.InstancedMesh>(null);
   const crosswalkMeshRef = useRef<THREE.InstancedMesh>(null);
+  const curvyJointMeshRef = useRef<THREE.InstancedMesh>(null);
+  const curvyCurbMeshRef = useRef<THREE.InstancedMesh>(null);
+  const blvdTreeTrunkRef = useRef<THREE.InstancedMesh>(null);
+  const blvdTreeCrownRef = useRef<THREE.InstancedMesh>(null);
+  const blvdBushRef = useRef<THREE.InstancedMesh>(null);
 
   const mainAveRoads = useMemo(
     () => world.roads.filter((r) => r.hasDoubleCenterLine),
     [world],
   );
+
+  // Smooth circular asphalt joint discs + roadside stone curbs for curvy roads
+  const { curvyJoints, curvyCurbs } = useMemo(() => {
+    const joints: Array<{ x: number; z: number; radius: number }> = [];
+    const curbs: Array<{ x: number; z: number; rotY: number; len: number }> = [];
+    const seenJoint = new Set<string>();
+    for (const seg of world.curvyRoadSegments) {
+      for (const [px, pz] of [
+        [seg.x1, seg.z1],
+        [seg.x2, seg.z2],
+      ]) {
+        const key = `${Math.round(px * 2)},${Math.round(pz * 2)}`;
+        if (!seenJoint.has(key)) {
+          seenJoint.add(key);
+          joints.push({ x: px, z: pz, radius: seg.width * 0.5 });
+        }
+      }
+      const dx = seg.x2 - seg.x1;
+      const dz = seg.z2 - seg.z1;
+      const len = Math.hypot(dx, dz);
+      if (len < 1) continue;
+      const rotY = Math.atan2(dx, dz);
+      const nx = -dz / len;
+      const nz = dx / len;
+      const mx = (seg.x1 + seg.x2) / 2;
+      const mz = (seg.z1 + seg.z2) / 2;
+      const offset = seg.width / 2 + 0.38;
+      curbs.push({ x: mx + nx * offset, z: mz + nz * offset, rotY, len: len + 0.5 });
+      curbs.push({ x: mx - nx * offset, z: mz - nz * offset, rotY, len: len + 0.5 });
+    }
+    return { curvyJoints: joints, curvyCurbs: curbs };
+  }, [world.curvyRoadSegments]);
+
+  // Road-aligned trees & landscaped bushes along expansion boulevards and curvy parkways (strictly road/intersection/bridge/plot-clear)
+  const { blvdTrees, blvdBushes } = useMemo(() => {
+    const rawTrees: Array<{ x: number; z: number; scale: number; tint: string }> = [];
+    const bushes: Array<{ x: number; z: number; scale: number; tint: string }> = [];
+    const treeTints = ['#4b7f43', '#5a8f4c', '#3d6d3b', '#679b55'];
+
+    // Trees & bushes flanking curvy scenic parkways and outer panoramic ring
+    world.curvyRoadSegments.forEach((seg, idx) => {
+      if (idx % 2 !== 0) return;
+      const dx = seg.x2 - seg.x1;
+      const dz = seg.z2 - seg.z1;
+      const len = Math.hypot(dx, dz);
+      if (len < 1) return;
+      const nx = -dz / len;
+      const nz = dx / len;
+      const mx = (seg.x1 + seg.x2) / 2;
+      const mz = (seg.z1 + seg.z2) / 2;
+      const offset = seg.width / 2 + 3.8;
+      for (const side of [-1, 1]) {
+        const tx = mx + nx * offset * side;
+        const tz = mz + nz * offset * side;
+        if (!isClearOfExpansionInfra(tx, tz, world, 2.3)) continue;
+        rawTrees.push({
+          x: tx,
+          z: tz,
+          scale: 0.95 + (rawTrees.length % 4) * 0.12,
+          tint: treeTints[rawTrees.length % treeTints.length],
+        });
+        const bx = tx + (dx / len) * 3.8;
+        const bz = tz + (dz / len) * 3.8;
+        if (isClearOfExpansionInfra(bx, bz, world, 1.9)) {
+          bushes.push({ x: bx, z: bz, scale: 0.95, tint: '#4d7c43' });
+        }
+      }
+    });
+
+    // Neat parallel boulevard tree rows flanking primary E-W boulevards (z = -130, 130, -330, 176)
+    for (const zAxis of [-130, 130, -330, 176]) {
+      for (let x = -800; x <= 840; x += 28) {
+        for (const side of [-1, 1]) {
+          const tx = x;
+          const tz = zAxis + side * 8.2;
+          if (!isClearOfExpansionInfra(tx, tz, world, 2.3)) continue;
+          rawTrees.push({
+            x: tx,
+            z: tz,
+            scale: 0.92 + (rawTrees.length % 3) * 0.1,
+            tint: treeTints[rawTrees.length % treeTints.length],
+          });
+        }
+      }
+    }
+
+    const trees = filterWithMinSpacing(rawTrees, 5.2);
+    return { blvdTrees: trees, blvdBushes: bushes };
+  }, [world]);
 
   const dashedCenterSegments = useMemo(() => {
     const segs: Array<{ x: number; z: number; rotY: number; len: number }> = [];
@@ -715,14 +1133,26 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
       if (p.status !== 'vip') {
         const sin = Math.sin(p.facingAngle);
         const cos = Math.cos(p.facingAngle);
-        const lx = p.width * 0.34;
-        const lz = p.status === 'expansion-open' ? -p.depth * 0.3 : p.depth * 0.28;
-        s.treesData.push({
-          x: p.x + lx * cos + lz * sin,
-          z: p.z - lx * sin + lz * cos,
-          scale: p.status === 'og' ? 1.12 : 0.72 + ((i % 5) * 0.08),
-          tint: foliageTints[i % foliageTints.length],
-        });
+        const lx =
+          p.status === 'expansion-open'
+            ? p.width * 0.34
+            : p.status === 'og'
+              ? -p.width / 2 + 2.2
+              : -p.width / 2 + 1.65;
+        const lz =
+          p.status === 'expansion-open'
+            ? -p.depth * 0.3
+            : p.status === 'og'
+              ? -p.depth / 2 + 2.2
+              : -p.depth / 2 + 1.65;
+        if (isExpansionPlotTreeSafe(p, lx, lz)) {
+          s.treesData.push({
+            x: p.x + lx * cos + lz * sin,
+            z: p.z - lx * sin + lz * cos,
+            scale: p.status === 'og' ? 1.05 : 0.72 + ((i % 4) * 0.06),
+            tint: foliageTints[i % foliageTints.length],
+          });
+        }
       }
 
       if (p.status !== 'vip' && p.houseStyle !== null) {
@@ -755,6 +1185,7 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
     const pitchedRoofGeo = new THREE.ConeGeometry(0.71, 1, 4, 1);
     pitchedRoofGeo.rotateY(Math.PI / 4);
     pitchedRoofGeo.computeVertexNormals();
+    const fenceBays = createUnitFenceBayGeometries();
 
     return {
       unitBoxGeo: new THREE.BoxGeometry(1, 1, 1),
@@ -766,6 +1197,9 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
       signBoardGeo: new THREE.BoxGeometry(0.92, 0.85, 0.14),
       trunkGeo: createHdTrunkGeo(),
       canopyGeo: createHdBroadleafCrownGeo(),
+      fenceHeritageBayGeo: fenceBays.heritageBay,
+      fenceModernBayGeo: fenceBays.modernBay,
+      fenceTimberBayGeo: fenceBays.timberBay,
       sidewalkMat: new THREE.MeshStandardMaterial({
         map: textures.sidewalkStone,
         color: '#d6d0c4',
@@ -779,7 +1213,21 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
         metalness: 0.65,
       }),
       padMat: new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.92 }),
-      drivewayMat: new THREE.MeshStandardMaterial({ color: '#cdc5b7', roughness: 0.86 }),
+      drivewayMat: new THREE.MeshStandardMaterial({
+        map: textures.sidewalkStone,
+        color: '#dcd4c5',
+        roughness: 0.85,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+      }),
+      curbMat: new THREE.MeshStandardMaterial({ color: '#b7afa1', roughness: 0.84 }),
+      fencePlinthMat: new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.86 }),
+      fenceBayMat: new THREE.MeshStandardMaterial({
+        color: '#ffffff',
+        roughness: 0.56,
+        metalness: 0.25,
+      }),
+      fencePillarMat: new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.72 }),
       wallMat: new THREE.MeshStandardMaterial({
         map: textures.plaster,
         color: '#ffffff',
@@ -835,10 +1283,17 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
       sharedRes.signBoardGeo.dispose();
       sharedRes.trunkGeo.dispose();
       sharedRes.canopyGeo.dispose();
+      sharedRes.fenceHeritageBayGeo.dispose();
+      sharedRes.fenceModernBayGeo.dispose();
+      sharedRes.fenceTimberBayGeo.dispose();
       sharedRes.sidewalkMat.dispose();
       sharedRes.lampPoleMat.dispose();
       sharedRes.padMat.dispose();
       sharedRes.drivewayMat.dispose();
+      sharedRes.curbMat.dispose();
+      sharedRes.fencePlinthMat.dispose();
+      sharedRes.fenceBayMat.dispose();
+      sharedRes.fencePillarMat.dispose();
       sharedRes.wallMat.dispose();
       sharedRes.pitchedRoofMat.dispose();
       sharedRes.flatRoofMat.dispose();
@@ -880,14 +1335,76 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
         const dx = r.x2 - r.x1;
         const dz = r.z2 - r.z1;
         const len = Math.hypot(dx, dz);
+        const trim = r.roadTier === 'scenic-curve' ? 0.2 : 4;
         _dummy.position.set((r.x1 + r.x2) / 2, ROAD_SURFACE_Y + 0.012, (r.z1 + r.z2) / 2);
         _dummy.rotation.set(0, Math.atan2(dx, dz), 0);
-        _dummy.scale.set(0.22, 1, Math.max(1, len - 4));
+        _dummy.scale.set(0.22, 1, Math.max(1, len - trim));
         _dummy.updateMatrix();
         roadLineMeshRef.current!.setMatrixAt(i, _dummy.matrix);
       });
       roadLineMeshRef.current.instanceMatrix.needsUpdate = true;
       roadLineMeshRef.current.computeBoundingSphere();
+    }
+
+    if (curvyJointMeshRef.current && curvyJoints.length > 0) {
+      curvyJoints.forEach((j, i) => {
+        _dummy.position.set(j.x, ROAD_SURFACE_Y / 2 - 0.002, j.z);
+        _dummy.rotation.set(0, 0, 0);
+        _dummy.scale.set(j.radius, 1, j.radius);
+        _dummy.updateMatrix();
+        curvyJointMeshRef.current!.setMatrixAt(i, _dummy.matrix);
+      });
+      curvyJointMeshRef.current.instanceMatrix.needsUpdate = true;
+      curvyJointMeshRef.current.computeBoundingSphere();
+    }
+
+    if (curvyCurbMeshRef.current && curvyCurbs.length > 0) {
+      curvyCurbs.forEach((c, i) => {
+        _dummy.position.set(c.x, SIDEWALK_HEIGHT * 0.42, c.z);
+        _dummy.rotation.set(0, c.rotY, 0);
+        _dummy.scale.set(0.75, SIDEWALK_HEIGHT * 0.84, c.len);
+        _dummy.updateMatrix();
+        curvyCurbMeshRef.current!.setMatrixAt(i, _dummy.matrix);
+      });
+      curvyCurbMeshRef.current.instanceMatrix.needsUpdate = true;
+      curvyCurbMeshRef.current.computeBoundingSphere();
+    }
+
+    if (blvdTreeTrunkRef.current && blvdTreeCrownRef.current && blvdTrees.length > 0) {
+      blvdTrees.forEach((t, i) => {
+        _dummy.position.set(t.x, 1.1 * t.scale, t.z);
+        _dummy.rotation.set(0, (i * 1.1) % (Math.PI * 2), 0);
+        _dummy.scale.set(t.scale, t.scale, t.scale);
+        _dummy.updateMatrix();
+        blvdTreeTrunkRef.current!.setMatrixAt(i, _dummy.matrix);
+
+        _dummy.position.set(t.x, 2.85 * t.scale, t.z);
+        _dummy.scale.set(t.scale, t.scale * 1.04, t.scale);
+        _dummy.updateMatrix();
+        blvdTreeCrownRef.current!.setMatrixAt(i, _dummy.matrix);
+        _color.set(t.tint);
+        blvdTreeCrownRef.current!.setColorAt(i, _color);
+      });
+      blvdTreeTrunkRef.current.instanceMatrix.needsUpdate = true;
+      blvdTreeCrownRef.current.instanceMatrix.needsUpdate = true;
+      if (blvdTreeCrownRef.current.instanceColor) blvdTreeCrownRef.current.instanceColor.needsUpdate = true;
+      blvdTreeTrunkRef.current.computeBoundingSphere();
+      blvdTreeCrownRef.current.computeBoundingSphere();
+    }
+
+    if (blvdBushRef.current && blvdBushes.length > 0) {
+      blvdBushes.forEach((b, i) => {
+        _dummy.position.set(b.x, 0.32 * b.scale, b.z);
+        _dummy.rotation.set(0, i * 0.7, 0);
+        _dummy.scale.set(1.15 * b.scale, 0.65 * b.scale, 1.15 * b.scale);
+        _dummy.updateMatrix();
+        blvdBushRef.current!.setMatrixAt(i, _dummy.matrix);
+        _color.set(b.tint);
+        blvdBushRef.current!.setColorAt(i, _color);
+      });
+      blvdBushRef.current.instanceMatrix.needsUpdate = true;
+      if (blvdBushRef.current.instanceColor) blvdBushRef.current.instanceColor.needsUpdate = true;
+      blvdBushRef.current.computeBoundingSphere();
     }
 
     if (dashedLineMeshRef.current) {
@@ -913,7 +1430,7 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
       crosswalkMeshRef.current.instanceMatrix.needsUpdate = true;
       crosswalkMeshRef.current.computeBoundingSphere();
     }
-  }, [world, mainAveRoads, dashedCenterSegments, crosswalkBars]);
+  }, [world, mainAveRoads, dashedCenterSegments, crosswalkBars, curvyJoints, curvyCurbs, blvdTrees, blvdBushes]);
 
   // Proximity LOD Window + focus tracker for OG sign culling
   const [detailedPlots, setDetailedPlots] = useState<ExpansionPlotSpec[]>([]);
@@ -1015,9 +1532,9 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
       {visibleOgSigns.map((p) => {
         const sin = Math.sin(p.facingAngle);
         const cos = Math.cos(p.facingAngle);
-        const doorZ = p.depth / 2 - 1.1;
-        const sx = p.x - 2.2 * cos + doorZ * sin;
-        const sz = p.z + 2.2 * sin + doorZ * cos;
+        const doorZ = p.depth / 2 - 0.06;
+        const sx = p.x - 2.95 * cos + doorZ * sin;
+        const sz = p.z + 2.95 * sin + doorZ * cos;
         return (
           <PlotNameplateSign
             key={`ognp-${p.plotId}`}
@@ -1030,14 +1547,28 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
         );
       })}
 
-      {/* High-Detail Articulated Proximity Houses + Instagram Nameplates */}
+      {/* High-Detail Articulated Proximity Houses + Parked Driveway Cars + Instagram Nameplates */}
       {detailedPlots.map((p) => {
-        const { hx, hz, doorZ } = getHouseOrigin(p);
+        const { hx, hz } = getHouseOrigin(p);
         const isOg = p.status === 'og';
         const sin = Math.sin(p.facingAngle);
         const cos = Math.cos(p.facingAngle);
-        const sx = p.x - 2.0 * cos + doorZ * sin;
-        const sz = p.z + 2.0 * sin + doorZ * cos;
+        const doorZ = p.depth / 2 - 0.04;
+        const sx = p.x - 2.42 * cos + doorZ * sin;
+        const sz = p.z + 2.42 * sin + doorZ * cos;
+
+        const styleSpec = p.houseStyle!;
+        const showParkedCar = styleSpec.hasGarageCarport;
+        const carLocalX = isOg
+          ? Math.min(p.width / 2 - 2.4, styleSpec.width / 2 + 1.45)
+          : Math.min(p.width / 2 - 1.9, -0.9 + styleSpec.width / 2 + 1.45);
+        const carLocalZ = isOg ? p.depth / 2 - 3.8 : p.depth / 2 - 2.55;
+        const cx = p.x + carLocalX * cos + carLocalZ * sin;
+        const cz = p.z - carLocalX * sin + carLocalZ * cos;
+        const carScale = isOg ? 0.96 : 0.84;
+        const carColors = ['#2b4c6f', '#c93c34', '#d8d5cd', '#395a49', '#3f4754', '#b57b3b'];
+        const carStyles: Array<'sedan' | 'hatchback' | 'wagon'> = ['sedan', 'hatchback', 'wagon'];
+        const hashNum = p.plotCode.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
 
         return (
           <group
@@ -1049,12 +1580,26 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
           >
             <group position={[hx, SIDEWALK_HEIGHT, hz]} rotation={[0, p.facingAngle, 0]}>
               <HouseModel
-                spec={p.houseStyle!}
+                spec={styleSpec}
                 textures={textures}
                 timeOfDay={timeOfDay}
                 doorOpen={Boolean(openDoors[p.plotId])}
+                houseNumber={p.plotCode}
               />
             </group>
+            {showParkedCar && (
+              <group
+                position={[cx, SIDEWALK_HEIGHT, cz]}
+                rotation={[0, p.facingAngle, 0]}
+                scale={carScale}
+              >
+                <CarMesh
+                  color={carColors[hashNum % carColors.length]}
+                  style={carStyles[hashNum % carStyles.length]}
+                  timeOfDay={timeOfDay}
+                />
+              </group>
+            )}
             {!isOg && (
               <PlotNameplateSign
                 position={[sx, SIDEWALK_HEIGHT, sz]}
@@ -1157,6 +1702,49 @@ export const ExpandedCityRenderer: React.FC<ExpandedCityRendererProps> = ({
             polygonOffset
             polygonOffsetFactor={-3}
           />
+        </instancedMesh>
+      )}
+
+      {/* Curvy Road Seamless Vertex Joints & Stone Curbs */}
+      {curvyJoints.length > 0 && (
+        <instancedMesh
+          ref={curvyJointMeshRef}
+          args={[undefined, undefined, curvyJoints.length]}
+          receiveShadow
+          frustumCulled
+        >
+          <cylinderGeometry args={[1, 1, ROAD_SURFACE_Y, 12]} />
+          <meshStandardMaterial map={textures.asphalt} color="#373c44" roughness={0.85} />
+        </instancedMesh>
+      )}
+      {curvyCurbs.length > 0 && (
+        <instancedMesh
+          ref={curvyCurbMeshRef}
+          args={[sharedRes.unitBoxGeo, sharedRes.curbMat, curvyCurbs.length]}
+          receiveShadow
+          frustumCulled
+        />
+      )}
+
+      {/* Road-Aligned Boulevard & Scenic Parkway Trees + Bushes */}
+      {blvdTrees.length > 0 && (
+        <>
+          <instancedMesh
+            ref={blvdTreeTrunkRef}
+            args={[sharedRes.trunkGeo, sharedRes.trunkMat, blvdTrees.length]}
+            frustumCulled
+          />
+          <instancedMesh
+            ref={blvdTreeCrownRef}
+            args={[sharedRes.canopyGeo, sharedRes.canopyMat, blvdTrees.length]}
+            frustumCulled
+          />
+        </>
+      )}
+      {blvdBushes.length > 0 && (
+        <instancedMesh ref={blvdBushRef} args={[undefined, undefined, blvdBushes.length]} frustumCulled>
+          <dodecahedronGeometry args={[0.75, 0]} />
+          <meshStandardMaterial color="#ffffff" roughness={0.88} />
         </instancedMesh>
       )}
 
