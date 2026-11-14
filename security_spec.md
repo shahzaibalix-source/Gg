@@ -3,11 +3,11 @@
 ## 1. Data Invariants
 1. **Default-Deny Baseline**: Every Firestore path not explicitly matched is denied for all reads and writes.
 2. **Login-Free Public Visitors (`request.auth == null` or non-admin signed-in user)**:
-   - Can read ONLY public town state: `/town_plots/{plotId}`, `/town_meta/economy`, `/town_meta/settings`, and `/test/{docId}`.
-   - Have **ZERO write permissions** anywhere in Firestore. Cannot alter house ownership, resident usernames, buildings, treasury, welcome text, or Instagram URL.
+   - Can read ONLY public town state: `/town_plots/{plotId}`, `/town_meta/economy`, `/town_meta/settings`, `/town_meta/expansion_manifest`, `/resident_directory_shards/{shardId}`, and `/test/{docId}`.
+   - Have **ZERO write permissions** anywhere in Firestore. Cannot alter house ownership, resident usernames, follower shards, buildings, treasury, welcome text, or Instagram URL.
    - Have **ZERO read permissions** for private resident records (`/resident_records/{plotId}`), username locks (`/resident_usernames/{usernameKey}`), `/admins/{uid}`, or `/admin_gate/{docId}`.
-3. **Super Admin (`email_verified == true` and `email == 'shahzaibalix@gmail.com'` or `/admins/{uid}` exists)**:
-   - Exclusive write authority for `/town_plots/{plotId}`, `/town_meta/economy`, `/town_meta/settings`, `/resident_records/{plotId}`, `/resident_usernames/{usernameKey}`, and `/admins/{adminUid}`.
+3. **Super Admin (`email_verified == true` and `email in ['knightrepacks@gmail.com', 'shahzaibalix@gmail.com']` or `/admins/{uid}` exists)**:
+   - Exclusive write authority for `/town_plots/{plotId}`, `/town_meta/economy`, `/town_meta/settings`, `/town_meta/expansion_manifest`, `/resident_directory_shards/{shardId}`, `/resident_records/{plotId}`, `/resident_usernames/{usernameKey}`, and `/admins/{adminUid}`.
    - All writes enforce strict `isValid[Entity]()` schema checks (`keys().hasAll`, `keys().hasOnly`, `.size()`, regex IDs, `https://` Instagram URL guard, and `request.time` server timestamps).
    - No client user or visitor can self-promote to Admin.
 

@@ -9,9 +9,11 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocFromServer,
+  getDocsFromServer,
   getFirestore,
   onSnapshot,
   serverTimestamp,
@@ -25,6 +27,15 @@ import {
   TownPublicSettings,
   UserRole,
 } from '../types';
+import {
+  CompactShardEntry,
+  ExpansionManifest,
+  ParsedFollowerDataset,
+} from '../expansion/types';
+import {
+  hydrateDatasetFromCompactEntries,
+  serializeDatasetToShards,
+} from '../expansion/zipFollowerParser';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
@@ -147,7 +158,7 @@ function serializePlotDoc(plot: TownPlot, actorUid: string) {
     facingAngle: plot.facingAngle,
     ownershipStatus: plot.ownershipStatus,
     ownerUid: (plot.ownerUid ?? '').slice(0, 128),
-    ownerUsername: (plot.ownerUsername ?? '').slice(0, 24),
+    ownerUsername: (plot.ownerUsername ?? '').slice(0, 32),
     verificationState: plot.verificationState,
     claimedAt: (plot.claimedAt ?? '').slice(0, 20),
     upgradeLevel: plot.upgradeLevel,
@@ -157,7 +168,7 @@ function serializePlotDoc(plot: TownPlot, actorUid: string) {
     hasBalcony: Boolean(plot.house?.hasBalcony),
     businessCategory: (plot.business?.category ?? '').slice(0, 24),
     businessName: (plot.business?.name ?? '').slice(0, 48),
-    businessOwnerUsername: (plot.business?.ownerUsername ?? '').slice(0, 24),
+    businessOwnerUsername: (plot.business?.ownerUsername ?? '').slice(0, 32),
     businessStatus: plot.business ? plot.business.status : 'none',
     businessLevel: plot.business ? plot.business.level : 1,
     businessDailyRevenue: plot.business ? Math.round(plot.business.dailyRevenue) : 0,
@@ -348,7 +359,7 @@ export async function adminAssignResidentInFirestore(params: {
   adminUid: string;
 }): Promise<void> {
   const { plot, previousUsername, inGameUsername, instagramHandle, notes, adminUid } = params;
-  const cleanUser = inGameUsername.trim().slice(0, 24);
+  const cleanUser = inGameUsername.trim().slice(0, 32);
   const cleanIg = instagramHandle.trim().replace(/^@+/, '@').slice(0, 40);
   const newKey = normalizeUsernameKey(cleanUser);
   const lockRef = doc(db, 'resident_usernames', newKey);
@@ -489,6 +500,318 @@ export async function adminSaveTownSettingsToFirestore(
       updatedByUid: adminUid.slice(0, 128),
       updatedAt: serverTimestamp(),
     });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function adminDemolishPlotInFirestore(params: {
+  plot: TownPlot;
+  previousUsername: string | null;
+  adminUid: string;
+}): Promise<void> {
+  const { plot, previousUsername, adminUid } = params;
+  const path = `town_plots/${plot.id}`;
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'town_plots', plot.id), serializePlotDoc(plot, adminUid));
+    batch.delete(doc(db, 'resident_records', plot.id));
+    if (previousUsername) {
+      batch.delete(doc(db, 'resident_usernames', normalizeUsernameKey(previousUsername)));
+    }
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export interface AdminRosterEntry {
+  uid: string;
+  grantedAt: string | null;
+}
+
+export function subscribeAdmins(
+  onAdmins: (entries: AdminRosterEntry[]) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const path = 'admins';
+  return onSnapshot(
+    collection(db, path),
+    (snap) => {
+      const list: AdminRosterEntry[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        const uid = typeof data.uid === 'string' ? data.uid : d.id;
+        let grantedAt: string | null = null;
+        if (data.grantedAt && typeof data.grantedAt.toDate === 'function') {
+          grantedAt = (data.grantedAt.toDate() as Date).toISOString().slice(0, 10);
+        }
+        list.push({ uid, grantedAt });
+      });
+      list.sort((a, b) => a.uid.localeCompare(b.uid));
+      onAdmins(list);
+    },
+    (err) => {
+      if (onError) onError(err);
+      else handleFirestoreError(err, OperationType.LIST, path);
+    },
+  );
+}
+
+export async function adminGrantAdminInFirestore(targetUid: string): Promise<void> {
+  const cleanUid = targetUid.trim();
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(cleanUid)) {
+    throw new Error('Invalid Firebase UID (allowed: letters, digits, _ and -, max 128 chars).');
+  }
+  const path = `admins/${cleanUid}`;
+  try {
+    await setDoc(doc(db, 'admins', cleanUid), {
+      uid: cleanUid,
+      grantedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function adminRevokeAdminInFirestore(targetUid: string): Promise<void> {
+  const cleanUid = targetUid.trim();
+  const path = `admins/${cleanUid}`;
+  try {
+    await deleteDoc(doc(db, 'admins', cleanUid));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export async function adminSeedTownDefaultsInFirestore(params: {
+  plots: TownPlot[];
+  treasuryBalance: number;
+  settings: TownPublicSettings;
+  adminUid: string;
+}): Promise<void> {
+  const { plots, treasuryBalance, settings, adminUid } = params;
+  const path = 'town_plots';
+  try {
+    const batch = writeBatch(db);
+    for (const plot of plots) {
+      batch.set(doc(db, 'town_plots', plot.id), serializePlotDoc(plot, adminUid));
+    }
+    batch.set(doc(db, 'town_meta', 'economy'), {
+      treasuryBalance: Math.max(0, Math.round(treasuryBalance)),
+      lastCollectedByUid: adminUid.slice(0, 128),
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(db, 'town_meta', 'settings'), {
+      welcomeTitle:
+        settings.welcomeTitle.trim().slice(0, 80) || DEFAULT_TOWN_SETTINGS.welcomeTitle,
+      welcomeSubtitle:
+        settings.welcomeSubtitle.trim().slice(0, 260) || DEFAULT_TOWN_SETTINGS.welcomeSubtitle,
+      instagramUrl: sanitizeInstagramUrl(settings.instagramUrl),
+      instagramInstruction:
+        settings.instagramInstruction.trim().slice(0, 280) ||
+        DEFAULT_TOWN_SETTINGS.instagramInstruction,
+      updatedByUid: adminUid.slice(0, 128),
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Sharded Follower Directory Persistence (3,447+ Residents) + Server Readback Verification
+// -----------------------------------------------------------------------------
+
+export function subscribeExpansionManifest(
+  onManifest: (manifest: ExpansionManifest | null) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const path = 'town_meta/expansion_manifest';
+  return onSnapshot(
+    doc(db, 'town_meta', 'expansion_manifest'),
+    (snap) => {
+      if (!snap.exists()) {
+        onManifest(null);
+        return;
+      }
+      const d = snap.data();
+      let importedAt = '';
+      if (d.updatedAt && typeof d.updatedAt.toDate === 'function') {
+        importedAt = (d.updatedAt.toDate() as Date).toISOString();
+      }
+      onManifest({
+        sourceArchiveName: String(d.sourceArchiveName ?? 'instagram-followers'),
+        totalRawFollowers: Number(d.totalRawFollowers ?? 0),
+        uniqueFollowers: Number(d.uniqueFollowers ?? 0),
+        duplicatesRemoved: Number(d.duplicatesRemoved ?? 0),
+        ogCount: Number(d.ogCount ?? 0),
+        remainingResidents: Number(d.remainingResidents ?? 0),
+        expansionOpenPlots: Number(d.expansionOpenPlots ?? 0),
+        vipUsername: String(d.vipUsername ?? ''),
+        vipPlotCode: String(d.vipPlotCode ?? 'OG-01'),
+        shardCount: Number(d.shardCount ?? 0),
+        verifiedInFirestore: true,
+        importedAt,
+      });
+    },
+    (err) => {
+      if (onError) onError(err);
+      else handleFirestoreError(err, OperationType.GET, path);
+    },
+  );
+}
+
+export async function loadExpansionDirectoryShardsFromServer(
+  manifest: ExpansionManifest,
+): Promise<ParsedFollowerDataset> {
+  const snap = await getDocsFromServer(collection(db, 'resident_directory_shards'));
+  const shardDocs: Array<{ index: number; entries: CompactShardEntry[] }> = [];
+
+  snap.forEach((d) => {
+    const data = d.data();
+    const index = typeof data.shardIndex === 'number' ? data.shardIndex : 0;
+    const entries = Array.isArray(data.entries) ? (data.entries as CompactShardEntry[]) : [];
+    shardDocs.push({ index, entries });
+  });
+
+  shardDocs.sort((a, b) => a.index - b.index);
+  const flatEntries = shardDocs.flatMap((s) => s.entries);
+
+  return hydrateDatasetFromCompactEntries(flatEntries, {
+    sourceName: manifest.sourceArchiveName,
+    totalRawFollowers: manifest.totalRawFollowers,
+    duplicatesRemoved: manifest.duplicatesRemoved,
+  });
+}
+
+export async function verifyExpansionPersistenceInFirestore(): Promise<{
+  exists: boolean;
+  manifest: ExpansionManifest | null;
+  verifiedShardCount: number;
+  verifiedResidentCount: number;
+}> {
+  const manifestSnap = await getDocFromServer(doc(db, 'town_meta', 'expansion_manifest'));
+  if (!manifestSnap.exists()) {
+    return {
+      exists: false,
+      manifest: null,
+      verifiedShardCount: 0,
+      verifiedResidentCount: 0,
+    };
+  }
+
+  const d = manifestSnap.data();
+  const shardSnap = await getDocsFromServer(collection(db, 'resident_directory_shards'));
+  let verifiedResidentCount = 0;
+  shardSnap.forEach((docSnap) => {
+    const entries = docSnap.data().entries;
+    if (Array.isArray(entries)) verifiedResidentCount += entries.length;
+  });
+
+  let importedAt = '';
+  if (d.updatedAt && typeof d.updatedAt.toDate === 'function') {
+    importedAt = (d.updatedAt.toDate() as Date).toISOString();
+  }
+
+  return {
+    exists: true,
+    manifest: {
+      sourceArchiveName: String(d.sourceArchiveName ?? 'instagram-followers'),
+      totalRawFollowers: Number(d.totalRawFollowers ?? 0),
+      uniqueFollowers: Number(d.uniqueFollowers ?? 0),
+      duplicatesRemoved: Number(d.duplicatesRemoved ?? 0),
+      ogCount: Number(d.ogCount ?? 0),
+      remainingResidents: Number(d.remainingResidents ?? 0),
+      expansionOpenPlots: Number(d.expansionOpenPlots ?? 0),
+      vipUsername: String(d.vipUsername ?? ''),
+      vipPlotCode: String(d.vipPlotCode ?? 'OG-01'),
+      shardCount: Number(d.shardCount ?? 0),
+      verifiedInFirestore: verifiedResidentCount === Number(d.uniqueFollowers ?? 0),
+      importedAt,
+    },
+    verifiedShardCount: shardSnap.size,
+    verifiedResidentCount,
+  };
+}
+
+export async function adminImportExpansionToFirestore(params: {
+  dataset: ParsedFollowerDataset;
+  expansionOpenPlots: number;
+  adminUid: string;
+  onProgress?: (label: string) => void;
+}): Promise<{
+  verifiedShardCount: number;
+  verifiedResidentCount: number;
+}> {
+  const { dataset, expansionOpenPlots, adminUid, onProgress } = params;
+  const shards = serializeDatasetToShards(dataset, 200);
+  const totalShards = shards.length;
+  const path = 'resident_directory_shards';
+
+  try {
+    // Write shards in conservative batches (5 shards per commit for payload safety)
+    for (let start = 0; start < totalShards; start += 5) {
+      const batch = writeBatch(db);
+      const end = Math.min(totalShards, start + 5);
+      for (let i = start; i < end; i++) {
+        const shardId = `shard-${String(i).padStart(4, '0')}`;
+        batch.set(doc(db, 'resident_directory_shards', shardId), {
+          shardId,
+          shardIndex: i,
+          totalShards,
+          entries: shards[i],
+          updatedByUid: adminUid.slice(0, 128),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      onProgress?.(`Uploading directory shards ${start + 1}–${end} of ${totalShards}...`);
+      await batch.commit();
+    }
+
+    // Delete any stale trailing shards from larger previous imports
+    const existingShards = await getDocsFromServer(collection(db, 'resident_directory_shards'));
+    const validIds = new Set(shards.map((_, idx) => `shard-${String(idx).padStart(4, '0')}`));
+    const staleDocs = existingShards.docs.filter((d) => !validIds.has(d.id));
+    if (staleDocs.length > 0) {
+      const delBatch = writeBatch(db);
+      staleDocs.forEach((d) => delBatch.delete(d.ref));
+      await delBatch.commit();
+    }
+
+    onProgress?.('Writing verified expansion manifest...');
+    await setDoc(doc(db, 'town_meta', 'expansion_manifest'), {
+      sourceArchiveName: dataset.sourceName.slice(0, 160),
+      totalRawFollowers: dataset.totalRawFollowers,
+      uniqueFollowers: dataset.uniqueFollowers,
+      duplicatesRemoved: dataset.duplicatesRemoved,
+      ogCount: dataset.ogMembers.length,
+      remainingResidents: dataset.remainingResidents.length,
+      expansionOpenPlots,
+      vipUsername: (dataset.vipRecord?.username ?? 'sweet_thedevil').slice(0, 32),
+      vipPlotCode: (dataset.vipRecord?.plotCode ?? 'OG-01').slice(0, 24),
+      shardCount: totalShards,
+      updatedByUid: adminUid.slice(0, 128),
+      updatedAt: serverTimestamp(),
+    });
+
+    onProgress?.('Running Firestore server readback verification...');
+    const verification = await verifyExpansionPersistenceInFirestore();
+    if (
+      !verification.exists ||
+      verification.verifiedResidentCount !== dataset.uniqueFollowers ||
+      verification.verifiedShardCount !== totalShards
+    ) {
+      throw new Error(
+        `Server verification mismatch: expected ${dataset.uniqueFollowers} residents across ${totalShards} shards, read back ${verification.verifiedResidentCount} across ${verification.verifiedShardCount}.`,
+      );
+    }
+
+    return {
+      verifiedShardCount: verification.verifiedShardCount,
+      verifiedResidentCount: verification.verifiedResidentCount,
+    };
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
   }

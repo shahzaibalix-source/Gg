@@ -22,7 +22,7 @@ import {
   InspectedParkInfo,
   InspectedVehicleInfo,
 } from './city/ui/CityHUD';
-import { AdminPanelTab } from './city/ui/AdminPanel';
+import { AdminPanelTab, FirestoreExpansionVerificationState } from './city/ui/AdminPanel';
 import { MobileJoystick } from './city/ui/MobileJoystick';
 import { CameraFocusTarget } from './city/camera/CityCameraController';
 import { TOTAL_TOWN_VEHICLE_COUNT } from './city/simulation/TrafficManager';
@@ -33,22 +33,49 @@ import { DynamicVehicleObstacle } from './city/simulation/WorldCollision';
 import { PlayerPoseState } from './city/player/WalkingPlayerController';
 import { townMultiplayerService } from './city/services/TownServices';
 import {
+  buildExpansionCityWorld,
+  ExpansionCityWorld,
+} from './city/expansion/ExpansionMasterPlan';
+import {
+  CompactShardEntry,
+  ExpansionManifest,
+  ExpansionPlotSpec,
+  ParsedFollowerDataset,
+} from './city/expansion/types';
+import {
+  BUNDLED_ARCHIVE_PATH,
+  BUNDLED_SEED_JSON_PATH,
+  hydrateDatasetFromCompactEntries,
+  parseFollowersFromUploadedFile,
+  parseFollowersFromZipUrl,
+} from './city/expansion/zipFollowerParser';
+import {
+  AdminRosterEntry,
   DEFAULT_TOWN_SETTINGS,
   adminAssignResidentInFirestore,
+  adminDemolishPlotInFirestore,
+  adminGrantAdminInFirestore,
+  adminImportExpansionToFirestore,
   adminMovePlotsInFirestore,
+  adminRevokeAdminInFirestore,
   adminRevokeResidentInFirestore,
   adminSavePlotToFirestore,
   adminSaveTownSettingsToFirestore,
   adminSaveTreasuryToFirestore,
+  adminSeedTownDefaultsInFirestore,
+  loadExpansionDirectoryShardsFromServer,
   resolveBackendUserRole,
   sanitizeInstagramUrl,
   signInWithGoogle,
   signOutUser,
   subscribeAdminResidentRecords,
+  subscribeAdmins,
   subscribeAuthState,
+  subscribeExpansionManifest,
   subscribeTownEconomy,
   subscribeTownPlots,
   subscribeTownSettings,
+  verifyExpansionPersistenceInFirestore,
 } from './city/firebase/firebaseClient';
 
 const DEFAULT_PROFILE: PlayerProfile = {
@@ -115,6 +142,22 @@ const PARK_INFO_MAP: Record<string, InspectedParkInfo> = {
       'Connects Residential, Commercial, and Park avenues',
     ],
   },
+  'park:park-botanical-conservatory': {
+    title: 'Lindenhof Botanical Conservatory',
+    subtitle: 'Grand glasshouse dome, geometric parterres & rose arboretum.',
+    highlights: [
+      'Glass botanical dome surrounded by manicured European parterres',
+      'Walkable promenades connecting East Historic Lindenhof to Grand Lake',
+    ],
+  },
+  'park:park-waterfront-harbor': {
+    title: 'Grand Lake & Waterfront Pier',
+    subtitle: 'Panoramic harbor lakefront, timber boardwalk & twin piers.',
+    highlights: [
+      'Stroll onto either lakeside wooden pier to view moored sailboats',
+      'Scenic coastal avenue linking Botanical Gardens and Outer Residential Quarters',
+    ],
+  },
 };
 
 export default function App() {
@@ -141,12 +184,22 @@ export default function App() {
   const [townSettings, setTownSettings] = useState<TownPublicSettings>(DEFAULT_TOWN_SETTINGS);
   const [adminPanelOpen, setAdminPanelOpen] = useState<boolean>(false);
   const [adminPanelTab, setAdminPanelTab] = useState<AdminPanelTab>('residents');
+  const [focusedAdminPlotId, setFocusedAdminPlotId] = useState<string | null>(null);
+  const [adminEntries, setAdminEntries] = useState<AdminRosterEntry[]>([]);
   const [residentRecords, setResidentRecords] = useState<Record<string, PrivateResidentRecord>>(
     {},
   );
   const [adminActionNotice, setAdminActionNotice] = useState<string | null>(null);
 
   const [selectedPlot, setSelectedPlot] = useState<TownPlot | null>(null);
+  const [selectedExpansionPlot, setSelectedExpansionPlot] = useState<ExpansionPlotSpec | null>(null);
+  const [followerDataset, setFollowerDataset] = useState<ParsedFollowerDataset | null>(null);
+  const [expansionManifest, setExpansionManifest] = useState<ExpansionManifest | null>(null);
+  const [firestoreVerifiedInfo, setFirestoreVerifiedInfo] =
+    useState<FirestoreExpansionVerificationState | null>(null);
+  const [cityMapOpen, setCityMapOpen] = useState(false);
+  const [ogMonumentOpen, setOgMonumentOpen] = useState(false);
+
   const [constructionDraft, setConstructionDraft] = useState<ConstructionDraft>(INITIAL_DRAFT);
   const [editorFeedback, setEditorFeedback] = useState<string | null>(null);
 
@@ -179,11 +232,46 @@ export default function App() {
   const mobileInputRef = useRef<MobileInputState>({ moveX: 0, moveY: 0, sprint: false });
   const vehicleStatesRef = useRef<DynamicVehicleObstacle[]>([]);
 
-  const stats = useMemo(
-    () => registry.getTownStats(TOTAL_TOWN_VEHICLE_COUNT),
+  // Build deterministic 3D expansion city while preserving any existing core plot usernames
+  const expansionWorld = useMemo<ExpansionCityWorld | null>(() => {
+    if (!followerDataset) return null;
+    const coreUsernames = new Set(
+      plots
+        .map((p) => p.ownerUsername?.trim().toLowerCase())
+        .filter((u): u is string => Boolean(u)),
+    );
+    const nonConflictingResidents = followerDataset.allResidents.filter(
+      (r) => !coreUsernames.has(r.usernameKey),
+    );
+    return buildExpansionCityWorld(
+      nonConflictingResidents.length > 0 ? nonConflictingResidents : followerDataset.allResidents,
+    );
+  }, [followerDataset, plots]);
+
+  useEffect(() => {
+    if (!expansionWorld) {
+      setSelectedExpansionPlot(null);
+      return;
+    }
+    setSelectedExpansionPlot((prev) =>
+      prev ? expansionWorld.plotById.get(prev.plotId) ?? null : null,
+    );
+  }, [expansionWorld]);
+
+  const stats = useMemo(() => {
+    const core = registry.getTownStats(TOTAL_TOWN_VEHICLE_COUNT);
+    if (!expansionWorld) return core;
+    const builtFollowerHouses =
+      expansionWorld.counts.ogCount + expansionWorld.counts.residentHouseCount;
+    return {
+      ...core,
+      totalHouses: core.totalHouses + builtFollowerHouses,
+      occupiedPlots: core.occupiedPlots + builtFollowerHouses,
+      availablePlots: core.availablePlots + expansionWorld.counts.openExpansionCount,
+      totalPopulation: core.totalPopulation + builtFollowerHouses,
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [registry, plots, treasuryVersion],
-  );
+  }, [registry, plots, treasuryVersion, expansionWorld]);
 
   // Listen for browser navigation to /admin or #/admin
   useEffect(() => {
@@ -251,10 +339,11 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Subscribe to private resident records strictly when Super Admin is verified
+  // Subscribe to private resident records & admin roster strictly when Super Admin is verified
   useEffect(() => {
     if (userRole !== 'super-admin') {
       setResidentRecords({});
+      setAdminEntries([]);
       return;
     }
     const unsubRecords = subscribeAdminResidentRecords(
@@ -263,7 +352,16 @@ export default function App() {
         console.warn('Admin resident records listener:', err.message);
       },
     );
-    return () => unsubRecords();
+    const unsubAdmins = subscribeAdmins(
+      (entries) => setAdminEntries(entries),
+      (err) => {
+        console.warn('Admin roster listener:', err.message);
+      },
+    );
+    return () => {
+      unsubRecords();
+      unsubAdmins();
+    };
   }, [userRole]);
 
   // Subscribe to public read-only Cloud Firestore town data (no sign-in required)
@@ -305,6 +403,79 @@ export default function App() {
       unsubSettings();
     };
   }, [registry]);
+
+  // Load bundled follower seed JSON immediately on boot (non-blocking, zero unauthenticated Firestore writes)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(BUNDLED_SEED_JSON_PATH);
+        if (!res.ok) return;
+        const seed = (await res.json()) as {
+          sourceName: string;
+          totalRawFollowers: number;
+          duplicatesRemoved: number;
+          shards: CompactShardEntry[][];
+        };
+        if (cancelled || !Array.isArray(seed.shards)) return;
+        const hydrated = hydrateDatasetFromCompactEntries(seed.shards.flat(), {
+          sourceName: seed.sourceName,
+          totalRawFollowers: seed.totalRawFollowers,
+          duplicatesRemoved: seed.duplicatesRemoved,
+        });
+        setFollowerDataset((prev) => prev ?? hydrated);
+      } catch (err) {
+        console.warn('Follower seed JSON preload warning:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Subscribe to Cloud Firestore expansion manifest; when present, hydrate authoritatively from server shards
+  useEffect(() => {
+    let active = true;
+    const unsubManifest = subscribeExpansionManifest(
+      async (manifest) => {
+        if (!active) return;
+        setExpansionManifest(manifest);
+        if (!manifest || manifest.shardCount <= 0) {
+          setFirestoreVerifiedInfo({
+            exists: false,
+            verifiedShardCount: 0,
+            verifiedResidentCount: 0,
+          });
+          return;
+        }
+        try {
+          const [loadedDataset, verified] = await Promise.all([
+            loadExpansionDirectoryShardsFromServer(manifest),
+            verifyExpansionPersistenceInFirestore(),
+          ]);
+          if (!active) return;
+          if (loadedDataset.allResidents.length > 0) {
+            setFollowerDataset(loadedDataset);
+          }
+          setFirestoreVerifiedInfo({
+            exists: verified.exists,
+            verifiedShardCount: verified.verifiedShardCount,
+            verifiedResidentCount: verified.verifiedResidentCount,
+            lastCheckedAt: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.warn('Firestore expansion shard load warning:', err);
+        }
+      },
+      (err) => {
+        console.warn('Expansion manifest listener:', err.message);
+      },
+    );
+    return () => {
+      active = false;
+      unsubManifest();
+    };
+  }, []);
 
   const handleChangeCameraMode = useCallback(
     (nextMode: CameraMode) => {
@@ -355,6 +526,9 @@ export default function App() {
           setSittingBenchId(null);
         } else {
           setWelcomeOpen(false);
+          setCityMapOpen(false);
+          setOgMonumentOpen(false);
+          setSelectedExpansionPlot(null);
           setConstructionDraft(INITIAL_DRAFT);
           setEditorFeedback(null);
           setPlayerPanelOpen(false);
@@ -416,6 +590,47 @@ export default function App() {
     focusTargetRef.current = { x, z, zoom };
   }, []);
 
+  const handleWalkToLocation = useCallback(
+    (x: number, z: number, expansionPlot?: ExpansionPlotSpec, corePlot?: TownPlot) => {
+      if (sittingBenchId) {
+        townMultiplayerService.releaseBench(sittingBenchId);
+        setSittingBenchId(null);
+      }
+      let destX = x;
+      let destZ = z;
+      let destYaw = Math.PI;
+      if (expansionPlot) {
+        const approach = expansionPlot.status === 'vip' ? 23.0 : expansionPlot.depth / 2 + 2.4;
+        destX = expansionPlot.x + Math.sin(expansionPlot.facingAngle) * approach;
+        destZ = expansionPlot.z + Math.cos(expansionPlot.facingAngle) * approach;
+        destYaw = expansionPlot.facingAngle + Math.PI;
+      } else if (corePlot) {
+        const approach = corePlot.depth / 2 + 2.4;
+        destX = corePlot.center.x + Math.sin(corePlot.facingAngle) * approach;
+        destZ = corePlot.center.z + Math.cos(corePlot.facingAngle) * approach;
+        destYaw = corePlot.facingAngle + Math.PI;
+      }
+      playerPoseRef.current.x = destX;
+      playerPoseRef.current.y = SIDEWALK_HEIGHT;
+      playerPoseRef.current.z = destZ;
+      playerPoseRef.current.yaw = destYaw;
+      setPlayerCoords({ x: destX, z: destZ });
+      setCameraMode('walking');
+      focusTargetRef.current = { x: destX, z: destZ, zoom: 38 };
+    },
+    [sittingBenchId],
+  );
+
+  const handleSelectExpansionPlot = useCallback((plot: ExpansionPlotSpec | null) => {
+    setSelectedExpansionPlot(plot);
+    if (plot) {
+      setSelectedPlot(null);
+      setInspectedVehicle(null);
+      setInspectedPark(null);
+      setOwnerSpotlightPlot(null);
+    }
+  }, []);
+
   const handleSelectPlot = useCallback(
     (plot: TownPlot | null) => {
       if (constructionDraft.mode !== 'idle' && plot && userRole === 'super-admin') {
@@ -431,6 +646,7 @@ export default function App() {
       }
       setSelectedPlot(plot);
       if (plot) {
+        setSelectedExpansionPlot(null);
         setInspectedVehicle(null);
         setInspectedPark(null);
         setOwnerSpotlightPlot(null);
@@ -472,33 +688,65 @@ export default function App() {
         return;
       }
 
-      if (actionId === 'toggle-door' && activeInteraction.plotId) {
-        const pid = activeInteraction.plotId;
-        setOpenDoors((prev) => ({ ...prev, [pid]: !prev[pid] }));
+      if (actionId === 'open-og-monument') {
+        setOgMonumentOpen(true);
         return;
       }
 
-      if (
-        (actionId === 'view-house' || actionId === 'view-shop' || actionId === 'view-town-info') &&
-        activeInteraction.plotId
-      ) {
-        const plot = plots.find((p) => p.id === activeInteraction.plotId) ?? null;
-        if (plot) {
-          setSelectedPlot(plot);
-          setInspectedVehicle(null);
-          setInspectedPark(null);
-          setOwnerSpotlightPlot(null);
+      if (actionId === 'toggle-door') {
+        const pid = activeInteraction.plotId ?? activeInteraction.expansionPlotId;
+        if (pid) {
+          setOpenDoors((prev) => ({ ...prev, [pid]: !prev[pid] }));
         }
         return;
       }
 
-      if (actionId === 'view-owner' && activeInteraction.plotId) {
-        const plot = plots.find((p) => p.id === activeInteraction.plotId) ?? null;
-        if (plot) {
-          setOwnerSpotlightPlot(plot);
-          setSelectedPlot(null);
-          setInspectedVehicle(null);
-          setInspectedPark(null);
+      if (actionId === 'view-house' || actionId === 'view-shop' || actionId === 'view-town-info') {
+        if (activeInteraction.expansionPlotId && expansionWorld) {
+          const ep = expansionWorld.plotById.get(activeInteraction.expansionPlotId) ?? null;
+          if (ep) {
+            setSelectedExpansionPlot(ep);
+            setSelectedPlot(null);
+            setInspectedVehicle(null);
+            setInspectedPark(null);
+            setOwnerSpotlightPlot(null);
+          }
+          return;
+        }
+        if (activeInteraction.plotId) {
+          const plot = plots.find((p) => p.id === activeInteraction.plotId) ?? null;
+          if (plot) {
+            setSelectedPlot(plot);
+            setSelectedExpansionPlot(null);
+            setInspectedVehicle(null);
+            setInspectedPark(null);
+            setOwnerSpotlightPlot(null);
+          }
+        }
+        return;
+      }
+
+      if (actionId === 'view-owner') {
+        if (activeInteraction.expansionPlotId && expansionWorld) {
+          const ep = expansionWorld.plotById.get(activeInteraction.expansionPlotId) ?? null;
+          if (ep) {
+            setSelectedExpansionPlot(ep);
+            setSelectedPlot(null);
+            setInspectedVehicle(null);
+            setInspectedPark(null);
+            setOwnerSpotlightPlot(null);
+          }
+          return;
+        }
+        if (activeInteraction.plotId) {
+          const plot = plots.find((p) => p.id === activeInteraction.plotId) ?? null;
+          if (plot) {
+            setOwnerSpotlightPlot(plot);
+            setSelectedPlot(null);
+            setSelectedExpansionPlot(null);
+            setInspectedVehicle(null);
+            setInspectedPark(null);
+          }
         }
         return;
       }
@@ -554,12 +802,16 @@ export default function App() {
           focusTargetRef.current = { x: 0, z: 14.5, zoom: 38 };
         } else if (activeInteraction.uid === 'park:park-playground') {
           focusTargetRef.current = { x: 42.2, z: 15.8, zoom: 38 };
+        } else if (activeInteraction.uid === 'park:park-botanical-conservatory') {
+          focusTargetRef.current = { x: 236, z: 0, zoom: 48 };
+        } else if (activeInteraction.uid === 'park:park-waterfront-harbor') {
+          focusTargetRef.current = { x: 378, z: 0, zoom: 48 };
         } else {
           focusTargetRef.current = { x: 41.2, z: -6.5, zoom: 38 };
         }
       }
     },
-    [activeInteraction, plots, sittingBenchId],
+    [activeInteraction, expansionWorld, plots, sittingBenchId],
   );
 
   const handleTriggerPrimaryAction = useCallback(() => {
@@ -615,6 +867,16 @@ export default function App() {
     [userRole, constructionDraft.mode],
   );
 
+  const handleManagePlotOwnership = useCallback(
+    (plotId: string) => {
+      if (userRole !== 'super-admin') return;
+      setFocusedAdminPlotId(plotId);
+      setAdminPanelTab('residents');
+      setAdminPanelOpen(true);
+    },
+    [userRole],
+  );
+
   const handleApproveResident = useCallback(
     async (params: {
       plotId: string;
@@ -642,6 +904,7 @@ export default function App() {
         return false;
       }
 
+      const prevSnapshot = registry.getPlotById(params.plotId);
       const res = registry.approveResidentForPlot(
         params.plotId,
         params.inGameUsername,
@@ -669,6 +932,11 @@ export default function App() {
         return true;
       } catch (err) {
         console.error('Admin resident approval failed:', err);
+        if (prevSnapshot) {
+          registry.restorePlot(prevSnapshot);
+          setPlots(registry.getAllPlots());
+          setSelectedPlot((cur) => (cur?.id === prevSnapshot.id ? prevSnapshot : cur));
+        }
         setAdminActionNotice(
           'Failed to save resident assignment in Cloud Firestore (duplicate or permission error).',
         );
@@ -704,6 +972,7 @@ export default function App() {
         return false;
       }
 
+      const prevSnapshot = registry.getPlotById(params.plotId);
       const res = registry.reassignResidentOnPlot(params.plotId, params.inGameUsername);
       if (!res.ok || !res.plot) {
         setAdminActionNotice(res.error ?? 'Could not update ownership.');
@@ -725,6 +994,11 @@ export default function App() {
         return true;
       } catch (err) {
         console.error('Admin resident reassign failed:', err);
+        if (prevSnapshot) {
+          registry.restorePlot(prevSnapshot);
+          setPlots(registry.getAllPlots());
+          setSelectedPlot((cur) => (cur?.id === prevSnapshot.id ? prevSnapshot : cur));
+        }
         setAdminActionNotice('Could not update resident ownership in Cloud Firestore.');
         return false;
       }
@@ -740,6 +1014,7 @@ export default function App() {
       }
       setAdminActionNotice(null);
 
+      const prevSnapshot = registry.getPlotById(plotId);
       const res = registry.revokeResidentOwnership(plotId);
       if (!res.ok || !res.plot) {
         setAdminActionNotice(res.error ?? 'Could not revoke ownership.');
@@ -760,7 +1035,51 @@ export default function App() {
         return true;
       } catch (err) {
         console.error('Admin revoke failed:', err);
+        if (prevSnapshot) {
+          registry.restorePlot(prevSnapshot);
+          setPlots(registry.getAllPlots());
+          setSelectedPlot((cur) => (cur?.id === prevSnapshot.id ? prevSnapshot : cur));
+        }
         setAdminActionNotice('Could not revoke ownership in Cloud Firestore.');
+        return false;
+      }
+    },
+    [userRole, currentUserUid, registry],
+  );
+
+  const handleDemolishPlot = useCallback(
+    async (plotId: string): Promise<boolean> => {
+      if (userRole !== 'super-admin' || !currentUserUid) {
+        setAuthError('Super Admin authorization required.');
+        return false;
+      }
+      setAdminActionNotice(null);
+
+      const prevSnapshot = registry.getPlotById(plotId);
+      const res = registry.removeBuildingFromPlot(plotId);
+      if (!res.ok || !res.plot) {
+        setAdminActionNotice(res.error ?? 'Could not demolish building.');
+        return false;
+      }
+
+      setPlots(registry.getAllPlots());
+      setSelectedPlot(res.plot);
+      try {
+        await adminDemolishPlotInFirestore({
+          plot: res.plot,
+          previousUsername: res.previousUsername,
+          adminUid: currentUserUid,
+        });
+        setAdminActionNotice(`Demolished building on ${res.plot.plotCode}. Plot is now empty.`);
+        return true;
+      } catch (err) {
+        console.error('Admin demolish failed:', err);
+        if (prevSnapshot) {
+          registry.restorePlot(prevSnapshot);
+          setPlots(registry.getAllPlots());
+          setSelectedPlot((cur) => (cur?.id === prevSnapshot.id ? prevSnapshot : cur));
+        }
+        setAdminActionNotice('Could not demolish building in Cloud Firestore.');
         return false;
       }
     },
@@ -795,18 +1114,185 @@ export default function App() {
     [userRole, currentUserUid],
   );
 
+  const handleGrantAdmin = useCallback(
+    async (targetUid: string): Promise<boolean> => {
+      if (userRole !== 'super-admin') {
+        setAuthError('Super Admin authorization required.');
+        return false;
+      }
+      setAdminActionNotice(null);
+      try {
+        await adminGrantAdminInFirestore(targetUid);
+        setAdminActionNotice(`Granted Super Admin role to UID ${targetUid}.`);
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Could not grant admin role.';
+        setAdminActionNotice(msg);
+        return false;
+      }
+    },
+    [userRole],
+  );
+
+  const handleRevokeAdmin = useCallback(
+    async (targetUid: string): Promise<boolean> => {
+      if (userRole !== 'super-admin') {
+        setAuthError('Super Admin authorization required.');
+        return false;
+      }
+      if (targetUid === currentUserUid) {
+        setAdminActionNotice('You cannot revoke your own active admin UID.');
+        return false;
+      }
+      setAdminActionNotice(null);
+      try {
+        await adminRevokeAdminInFirestore(targetUid);
+        setAdminActionNotice(`Revoked Super Admin role for UID ${targetUid}.`);
+        return true;
+      } catch {
+        setAdminActionNotice('Could not revoke admin UID in Cloud Firestore.');
+        return false;
+      }
+    },
+    [userRole, currentUserUid],
+  );
+
+  const handleSeedTownDefaults = useCallback(async (): Promise<boolean> => {
+    if (userRole !== 'super-admin' || !currentUserUid) {
+      setAuthError('Super Admin authorization required.');
+      return false;
+    }
+    setAdminActionNotice(null);
+    try {
+      const currentPlots = registry.getAllPlots();
+      await adminSeedTownDefaultsInFirestore({
+        plots: currentPlots,
+        treasuryBalance: stats.townTreasury,
+        settings: townSettings,
+        adminUid: currentUserUid,
+      });
+      setAdminActionNotice(`Synced ${currentPlots.length} town plots, treasury, and settings to Cloud Firestore.`);
+      return true;
+    } catch (err) {
+      console.error('Cloud town seed failed:', err);
+      setAdminActionNotice('Could not sync town defaults to Cloud Firestore.');
+      return false;
+    }
+  }, [userRole, currentUserUid, registry, stats.townTreasury, townSettings]);
+
+  const handleImportDatasetToFirestore = useCallback(
+    async (dataset: ParsedFollowerDataset, onProgress?: (msg: string) => void): Promise<boolean> => {
+      if (userRole !== 'super-admin' || !currentUserUid) {
+        setAuthError('Super Admin authorization required to persist follower directory.');
+        return false;
+      }
+      setAdminActionNotice(null);
+      try {
+        setFollowerDataset(dataset);
+        const world = buildExpansionCityWorld(dataset.allResidents);
+        const result = await adminImportExpansionToFirestore({
+          dataset,
+          expansionOpenPlots: world.counts.openExpansionCount,
+          adminUid: currentUserUid,
+          onProgress,
+        });
+        const verified = await verifyExpansionPersistenceInFirestore();
+        setFirestoreVerifiedInfo({
+          exists: verified.exists,
+          verifiedShardCount: verified.verifiedShardCount,
+          verifiedResidentCount: verified.verifiedResidentCount,
+          lastCheckedAt: new Date().toISOString(),
+        });
+        if (verified.manifest) {
+          setExpansionManifest(verified.manifest);
+        }
+        setAdminActionNotice(
+          `Imported & server-verified ${result.verifiedResidentCount.toLocaleString()} followers across ${result.verifiedShardCount} Firestore shards.`,
+        );
+        return true;
+      } catch (err) {
+        console.error('Follower ZIP import failed:', err);
+        const message = err instanceof Error ? err.message : 'Follower ZIP import failed.';
+        setAdminActionNotice(`Import failed: ${message}`);
+        return false;
+      }
+    },
+    [userRole, currentUserUid],
+  );
+
+  const handleImportBundledZip = useCallback(
+    async (onProgress: (msg: string) => void): Promise<boolean> => {
+      try {
+        onProgress('Downloading & extracting bundled Instagram ZIP archive...');
+        const dataset = await parseFollowersFromZipUrl(BUNDLED_ARCHIVE_PATH);
+        return await handleImportDatasetToFirestore(dataset, onProgress);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Could not parse bundled ZIP archive.';
+        setAdminActionNotice(`ZIP parse error: ${message}`);
+        onProgress(`Error: ${message}`);
+        return false;
+      }
+    },
+    [handleImportDatasetToFirestore],
+  );
+
+  const handleImportUploadedZip = useCallback(
+    async (file: File, onProgress: (msg: string) => void): Promise<boolean> => {
+      try {
+        onProgress(`Extracting followers from ${file.name}...`);
+        const dataset = await parseFollowersFromUploadedFile(file);
+        return await handleImportDatasetToFirestore(dataset, onProgress);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Could not parse uploaded file.';
+        setAdminActionNotice(`Upload parse error: ${message}`);
+        onProgress(`Error: ${message}`);
+        return false;
+      }
+    },
+    [handleImportDatasetToFirestore],
+  );
+
+  const handleVerifyExpansionInFirestore = useCallback(async (): Promise<void> => {
+    try {
+      const verified = await verifyExpansionPersistenceInFirestore();
+      setFirestoreVerifiedInfo({
+        exists: verified.exists,
+        verifiedShardCount: verified.verifiedShardCount,
+        verifiedResidentCount: verified.verifiedResidentCount,
+        lastCheckedAt: new Date().toISOString(),
+      });
+      if (verified.manifest) {
+        setExpansionManifest(verified.manifest);
+      }
+      setAdminActionNotice(
+        verified.exists
+          ? `Server readback verified: ${verified.verifiedResidentCount.toLocaleString()} residents in ${verified.verifiedShardCount} shards.`
+          : 'No persisted follower directory found in Firestore yet.',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Firestore readback failed.';
+      setAdminActionNotice(`Verification error: ${msg}`);
+    }
+  }, []);
+
   const handleClaimBusinessPlot = useCallback(
     (plotId: string, username: string) => {
       if (userRole !== 'super-admin' || !currentUserUid) {
         setAuthError('Super Admin authorization required to assign business leases.');
         return;
       }
+      const prevSnapshot = registry.getPlotById(plotId);
       const updated = registry.claimOrOpenBusiness(plotId, username);
       if (!updated) return;
       setPlots(registry.getAllPlots());
       setSelectedPlot(updated);
       void adminSavePlotToFirestore(updated, currentUserUid).catch((err) => {
         console.error('Admin business lease failed:', err);
+        if (prevSnapshot) {
+          registry.restorePlot(prevSnapshot);
+          setPlots(registry.getAllPlots());
+          setSelectedPlot((cur) => (cur?.id === prevSnapshot.id ? prevSnapshot : cur));
+        }
         setAuthError('Could not save business lease to Cloud Firestore.');
       });
     },
@@ -819,12 +1305,18 @@ export default function App() {
         setAuthError('Super Admin authorization required to upgrade properties.');
         return;
       }
+      const prevSnapshot = registry.getPlotById(plotId);
       const updated = registry.upgradePlot(plotId);
       if (!updated) return;
       setPlots(registry.getAllPlots());
       setSelectedPlot(updated);
       void adminSavePlotToFirestore(updated, currentUserUid).catch((err) => {
         console.error('Admin plot upgrade failed:', err);
+        if (prevSnapshot) {
+          registry.restorePlot(prevSnapshot);
+          setPlots(registry.getAllPlots());
+          setSelectedPlot((cur) => (cur?.id === prevSnapshot.id ? prevSnapshot : cur));
+        }
         setAuthError('Plot upgrade could not be saved to Cloud Firestore.');
       });
     },
@@ -836,13 +1328,16 @@ export default function App() {
       setAuthError('Super Admin authorization required to collect town treasury taxes.');
       return;
     }
+    const prevBalance = stats.townTreasury;
     const nextBalance = registry.collectDailyBusinessRevenue();
     setTreasuryVersion((v) => v + 1);
     void adminSaveTreasuryToFirestore(nextBalance, currentUserUid).catch((err) => {
       console.error('Treasury save failed:', err);
+      registry.setTreasuryBalance(prevBalance);
+      setTreasuryVersion((v) => v + 1);
       setAuthError('Could not persist treasury balance to Cloud Firestore.');
     });
-  }, [registry, userRole, currentUserUid]);
+  }, [registry, userRole, currentUserUid, stats.townTreasury]);
 
   const handleUpdateDraft = useCallback(
     (patch: Partial<ConstructionDraft>) => {
@@ -861,6 +1356,7 @@ export default function App() {
     if (!constructionDraft.targetPlotId) return;
 
     if (constructionDraft.mode === 'place') {
+      const prevTarget = registry.getPlotById(constructionDraft.targetPlotId);
       const res = registry.placeBuildingOnEmptyPlot(constructionDraft.targetPlotId, {
         buildingType: constructionDraft.buildingType,
         houseArchetype: constructionDraft.houseArchetype,
@@ -877,9 +1373,16 @@ export default function App() {
       setEditorFeedback(null);
       void adminSavePlotToFirestore(res.plot, currentUserUid).catch((err) => {
         console.error('Admin place building failed:', err);
+        if (prevTarget) {
+          registry.restorePlot(prevTarget);
+          setPlots(registry.getAllPlots());
+          setSelectedPlot((cur) => (cur?.id === prevTarget.id ? prevTarget : cur));
+        }
         setAuthError('Could not save new building to Cloud Firestore.');
       });
     } else if (constructionDraft.mode === 'move' && constructionDraft.sourcePlotId) {
+      const prevSrc = registry.getPlotById(constructionDraft.sourcePlotId);
+      const prevDst = registry.getPlotById(constructionDraft.targetPlotId);
       const res = registry.moveBuildingBetweenPlots(
         constructionDraft.sourcePlotId,
         constructionDraft.targetPlotId,
@@ -894,6 +1397,12 @@ export default function App() {
       setEditorFeedback(null);
       void adminMovePlotsInFirestore(res.dstPlot, res.srcPlot, currentUserUid).catch((err) => {
         console.error('Admin move building failed:', err);
+        if (prevSrc) registry.restorePlot(prevSrc);
+        if (prevDst) registry.restorePlot(prevDst);
+        setPlots(registry.getAllPlots());
+        if (prevDst) {
+          setSelectedPlot((cur) => (cur?.id === prevDst.id ? prevDst : cur));
+        }
         setAuthError('Could not save relocated building to Cloud Firestore.');
       });
     }
@@ -944,11 +1453,13 @@ export default function App() {
       >
         <CityScene
           plots={plots}
+          expansionWorld={expansionWorld}
           cameraMode={cameraMode}
           cinematicTour={cinematicTour}
           timeOfDay={timeOfDay}
           weather={weather}
           selectedPlotId={selectedPlot?.id ?? null}
+          selectedExpansionPlotId={selectedExpansionPlot?.plotId ?? null}
           constructionDraft={constructionDraft}
           playerProfile={playerProfile}
           sittingBenchId={sittingBenchId}
@@ -959,6 +1470,8 @@ export default function App() {
           focusTargetRef={focusTargetRef}
           birdAudioEnabled={birdAudioEnabled}
           onSelectPlot={handleSelectPlot}
+          onSelectExpansionPlot={handleSelectExpansionPlot}
+          onOpenMonumentModal={() => setOgMonumentOpen(true)}
           onSelectBench={handleSelectBenchFromScene}
           onActiveInteractionChange={handleActiveInteractionChange}
           onTriggerPrimaryAction={handleTriggerPrimaryAction}
@@ -993,10 +1506,21 @@ export default function App() {
         adminRouteRequested={adminRouteRequested}
         adminPanelOpen={adminPanelOpen}
         adminPanelTab={adminPanelTab}
+        focusedAdminPlotId={focusedAdminPlotId}
+        currentUserUid={currentUserUid}
+        adminEntries={adminEntries}
         residentRecords={residentRecords}
         townSettings={townSettings}
         welcomeOpen={welcomeOpen}
         selectedPlot={selectedPlot}
+        selectedExpansionPlot={selectedExpansionPlot}
+        expansionWorld={expansionWorld}
+        followerDataset={followerDataset}
+        expansionManifest={expansionManifest}
+        firestoreVerifiedInfo={firestoreVerifiedInfo}
+        openDoors={openDoors}
+        cityMapOpen={cityMapOpen}
+        ogMonumentOpen={ogMonumentOpen}
         constructionDraft={constructionDraft}
         editorFeedback={editorFeedback}
         adminActionNotice={adminActionNotice}
@@ -1016,6 +1540,7 @@ export default function App() {
         onTogglePlayerPanel={handleTogglePlayerPanel}
         onUpdateProfile={handleUpdateProfile}
         onTriggerInteraction={handleTriggerInteraction}
+        onToggleDoor={(pid) => setOpenDoors((prev) => ({ ...prev, [pid]: !prev[pid] }))}
         onCloseVehicleInspector={() => setInspectedVehicle(null)}
         onCloseParkInspector={() => setInspectedPark(null)}
         onCloseOwnerSpotlight={() => setOwnerSpotlightPlot(null)}
@@ -1031,12 +1556,27 @@ export default function App() {
         onCloseWelcome={() => setWelcomeOpen(false)}
         onToggleAdminPanel={handleToggleAdminPanel}
         onChangeAdminTab={setAdminPanelTab}
+        onClearFocusedAdminPlot={() => setFocusedAdminPlotId(null)}
+        onManagePlotOwnership={handleManagePlotOwnership}
         onApproveResident={handleApproveResident}
         onReassignResident={handleReassignResident}
         onRevokeResident={handleRevokeResident}
+        onDemolishPlot={handleDemolishPlot}
         onSaveTownSettings={handleSaveTownSettings}
+        onGrantAdmin={handleGrantAdmin}
+        onRevokeAdmin={handleRevokeAdmin}
+        onSeedTownDefaults={handleSeedTownDefaults}
         onSelectPlot={setSelectedPlot}
+        onSelectExpansionPlot={handleSelectExpansionPlot}
+        onToggleCityMap={(next) => setCityMapOpen((prev) => (typeof next === 'boolean' ? next : !prev))}
+        onToggleOgMonument={(next) =>
+          setOgMonumentOpen((prev) => (typeof next === 'boolean' ? next : !prev))
+        }
         onFocusLocation={handleFocusLocation}
+        onWalkToLocation={handleWalkToLocation}
+        onImportBundledZip={handleImportBundledZip}
+        onImportUploadedZip={handleImportUploadedZip}
+        onVerifyExpansionInFirestore={handleVerifyExpansionInFirestore}
         onClaimBusinessPlot={handleClaimBusinessPlot}
         onUpgradePlot={handleUpgradePlot}
         onCollectDailyRevenue={handleCollectDailyRevenue}

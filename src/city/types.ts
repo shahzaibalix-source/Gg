@@ -111,7 +111,8 @@ export type InteractionActionId =
   | 'view-shop'
   | 'explore-park'
   | 'view-park-info'
-  | 'view-town-info';
+  | 'view-town-info'
+  | 'open-og-monument';
 
 export interface InteractionButtonSpec {
   id: InteractionActionId;
@@ -127,6 +128,7 @@ export interface NearbyInteractable {
   subtitle: string;
   distance: number;
   plotId?: string;
+  expansionPlotId?: string;
   benchId?: string;
   vehicleId?: string;
   actions: InteractionButtonSpec[];

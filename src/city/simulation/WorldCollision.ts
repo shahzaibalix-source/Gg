@@ -6,6 +6,7 @@ import {
   STREET_LAMPS,
   TOWN_BENCHES,
 } from '../world/MasterTownBlueprint';
+import { ExpansionCityWorld, queryNearbyExpansionPlots } from '../expansion/ExpansionMasterPlan';
 
 export interface DynamicVehicleObstacle {
   id: string;
@@ -102,41 +103,154 @@ function pushOutCircle(
   };
 }
 
+function isOnBridge(
+  x: number,
+  z: number,
+  expansionWorld: ExpansionCityWorld,
+): { onBridge: boolean; elevation: number } {
+  for (const b of expansionWorld.bridges) {
+    const isNSRot = Math.abs(b.rotY) < 0.4;
+    const hx = isNSRot ? b.length / 2 + 0.6 : b.width / 2 + 1.4;
+    const hz = isNSRot ? b.width / 2 + 1.4 : b.length / 2 + 0.6;
+    if (Math.abs(x - b.x) <= hx && Math.abs(z - b.z) <= hz) {
+      return {
+        onBridge: true,
+        elevation: b.kind === 'pedestrian' ? SIDEWALK_HEIGHT + 0.85 : ROAD_SURFACE_Y + 0.24,
+      };
+    }
+  }
+  return { onBridge: false, elevation: 0 };
+}
+
+function isInsideExpansionGridArea(x: number, z: number): boolean {
+  if (x < -1045 || x > 1045 || z < -765 || z > 765) return false;
+  // Core Lindenhof is handled by core elevation logic
+  if (x >= -138 && x <= 138 && z >= -128 && z <= 128) return false;
+  return true;
+}
+
 /**
- * Returns exact walking ground elevation (roads, sidewalks, square/park, footbridge, outer grass).
+ * Returns exact walking ground elevation (roads, sidewalks, square/park, footbridges,
+ * botanical gardens, waterfront boardwalk/piers/island, Venice canal bridges, outer grass).
  */
-export function getSurfaceElevationAt(x: number, z: number): number {
-  // Arched wooden footbridge spanning the park lake
+export function getSurfaceElevationAt(
+  x: number,
+  z: number,
+  expansionWorld?: ExpansionCityWorld | null,
+): number {
+  // Arched wooden footbridge spanning the core park lake
   if (x >= 56.9 && x <= 59.1 && z >= -13.6 && z <= -3.4) {
     return SIDEWALK_HEIGHT + 0.42;
   }
 
-  // Asphalt road corridors (X = ±26 / ±78, Z = ±26 / ±78)
-  const onMainRoad =
-    Math.abs(x - 26) < 5.25 ||
-    Math.abs(x + 26) < 5.25 ||
-    Math.abs(z - 26) < 5.25 ||
-    Math.abs(z + 26) < 5.25;
-  const onSideRoad =
-    Math.abs(x - 78) < 4.5 ||
-    Math.abs(x + 78) < 4.5 ||
-    Math.abs(z - 78) < 4.5 ||
-    Math.abs(z + 78) < 4.5;
+  // Core asphalt road corridors (X = ±26 / ±78, Z = ±26 / ±78)
+  const inCore = Math.abs(x) <= 138 && Math.abs(z) <= 128;
+  if (inCore) {
+    const onMainRoad =
+      Math.abs(x - 26) < 5.25 ||
+      Math.abs(x + 26) < 5.25 ||
+      Math.abs(z - 26) < 5.25 ||
+      Math.abs(z + 26) < 5.25;
+    const onSideRoad =
+      Math.abs(x - 78) < 4.5 ||
+      Math.abs(x + 78) < 4.5 ||
+      Math.abs(z - 78) < 4.5 ||
+      Math.abs(z + 78) < 4.5;
 
-  if (onMainRoad || onSideRoad) {
-    // Roundabout central landscaped islands at (-26, 0) & (26, 0)
-    if (
-      Math.hypot(x + 26, z) < 3.6 ||
-      Math.hypot(x - 26, z) < 3.6
-    ) {
-      return SIDEWALK_HEIGHT + 0.08;
+    if (onMainRoad || onSideRoad) {
+      if (Math.hypot(x + 26, z) < 3.6 || Math.hypot(x - 26, z) < 3.6) {
+        return SIDEWALK_HEIGHT + 0.08;
+      }
+      return ROAD_SURFACE_Y;
     }
-    return ROAD_SURFACE_Y;
+
+    if (x >= -106 && x <= 106 && z >= -74 && z <= 74) {
+      return SIDEWALK_HEIGHT;
+    }
   }
 
-  // Sidewalks, interior district blocks, and outer residential blocks
-  if (x >= -106 && x <= 106 && z >= -74 && z <= 74) {
-    return SIDEWALK_HEIGHT;
+  if (expansionWorld) {
+    // Venice Canal Bridges (35 road & pedestrian spans)
+    const bridgeHit = isOnBridge(x, z, expansionWorld);
+    if (bridgeHit.onBridge) {
+      return bridgeHit.elevation;
+    }
+
+    // Grand Lake Central Garden Island + Dual Footbridges (World X = 468, Z = 0)
+    if (x >= 446 && x <= 490 && z >= -29 && z <= 29) {
+      return SIDEWALK_HEIGHT + 0.42;
+    }
+    if (x >= 366 && x <= 542 && Math.abs(z) <= 2.8) {
+      return SIDEWALK_HEIGHT + 0.48;
+    }
+
+    // Waterfront boardwalk & scenic piers extending into Grand Lindenhof Lake
+    if (x >= 353 && x <= 367 && z >= -124 && z <= 124) {
+      return SIDEWALK_HEIGHT + 0.36;
+    }
+    if (
+      x >= 366 &&
+      x <= 394 &&
+      ((z >= -46.7 && z <= -41.3) || (z >= 41.3 && z <= 46.7))
+    ) {
+      return SIDEWALK_HEIGHT + 0.42;
+    }
+
+    // Curved Panoramic Ring Boulevard
+    const ellipR = Math.hypot(x / 1085, z / 815);
+    if (Math.abs(ellipR - 1) <= 0.011) {
+      return ROAD_SURFACE_Y;
+    }
+
+    // Named Primary Boulevards & OG Avenues
+    const onBoulevard =
+      (Math.abs(z + 130) < 5.75 && x >= -835 && x <= 885) ||
+      (Math.abs(z - 130) < 5.75 && x >= -835 && x <= 885) ||
+      (Math.abs(z + 330) < 5.6 && x >= -835 && x <= 885) ||
+      (Math.abs(z - 176) < 5.6 && x >= -835 && x <= 885) ||
+      (Math.abs(x + 140) < 5.5 && z >= -635 && z <= 675) ||
+      (Math.abs(x - 145) < 5.5 && z >= -335 && z <= 675) ||
+      (Math.abs(x - 326) < 5.5 && z >= -635 && z <= 675) ||
+      (Math.abs(x - 564) < 5.5 && z >= -635 && z <= 675) ||
+      (Math.abs(x + 292) < 5.25 && z >= -635 && z <= 675) ||
+      (Math.abs(x + 36) < 4.9 && z >= -332 && z <= -130) ||
+      (Math.abs(x - 36) < 4.9 && z >= -332 && z <= -130) ||
+      (Math.abs(z + 248) < 4.6 &&
+        ((x >= -248 && x <= -36) || (x >= 36 && x <= 248))) ||
+      (Math.abs(x + 246) < 4.75 && z >= -332 && z <= -130) ||
+      (Math.abs(x - 246) < 4.75 && z >= -332 && z <= -130);
+
+    if (onBoulevard) {
+      return ROAD_SURFACE_Y;
+    }
+
+    // Grand Central Park + Waterfront Pads + OG District + Royal Crescent Garden
+    if (
+      (x >= 148 && x <= 326 && z >= -130 && z <= 130) ||
+      (x >= 326 && x <= 568 && z >= -136 && z <= 136) ||
+      (x >= -248 && x <= 248 && z >= -330 && z <= -130)
+    ) {
+      return SIDEWALK_HEIGHT;
+    }
+
+    // 6 Unique District Parks
+    for (const pk of expansionWorld.districtParks) {
+      if (Math.abs(x - pk.x) <= pk.width / 2 && Math.abs(z - pk.z) <= pk.depth / 2) {
+        return SIDEWALK_HEIGHT + 0.02;
+      }
+    }
+
+    // Master Suburban Grid Roads (x = col*140 - 70, z = row*44 - 22)
+    if (isInsideExpansionGridArea(x, z)) {
+      const modX = Math.abs((((x + 70) % 140) + 140) % 140 - 70);
+      const distGridX = 70 - modX;
+      const modZ = Math.abs((((z + 22) % 44) + 44) % 44 - 22);
+      const distGridZ = 22 - modZ;
+      if (distGridX < 4.7 || distGridZ < 4.5) {
+        return ROAD_SURFACE_Y;
+      }
+      return SIDEWALK_HEIGHT;
+    }
   }
 
   return 0;
@@ -144,7 +258,7 @@ export function getSurfaceElevationAt(x: number, z: number): number {
 
 /**
  * Resolves 2D walking collisions against buildings, hedges, fences, benches, fountains,
- * lake edges, streetlamps, parked cars, and live traffic vehicles.
+ * lake edges, streetlamps, parked cars, live traffic vehicles, and expanded city plots/landmarks.
  */
 export function resolvePlayerMovement(
   targetX: number,
@@ -152,9 +266,14 @@ export function resolvePlayerMovement(
   plots: TownPlot[],
   dynamicVehicles: DynamicVehicleObstacle[],
   playerRadius = 0.36,
+  expansionWorld?: ExpansionCityWorld | null,
 ): { x: number; z: number } {
-  let x = Math.max(-124, Math.min(124, targetX));
-  let z = Math.max(-124, Math.min(124, targetZ));
+  const minX = expansionWorld ? -1120 : -124;
+  const maxX = expansionWorld ? 1120 : 124;
+  const minZ = expansionWorld ? -840 : -124;
+  const maxZ = expansionWorld ? 840 : 124;
+  let x = Math.max(minX, Math.min(maxX, targetX));
+  let z = Math.max(minZ, Math.min(maxZ, targetZ));
 
   // Run 2 solver iterations for clean corner sliding
   for (let iter = 0; iter < 2; iter++) {
@@ -375,6 +494,182 @@ export function resolvePlayerMovement(
       });
       x = res.x;
       z = res.z;
+    }
+
+    // 9. Expanded Follower City (O(1) Spatial Hash + Special Landmarks)
+    if (expansionWorld) {
+      // OG 50 Monument Recognition Wall at (0, -158)
+      const mon = expansionWorld.monumentPosition;
+      if (Math.abs(x - mon.x) < 17 && Math.abs(z - mon.z) < 6) {
+        const res = pushOutOrientedBox(x, z, playerRadius, {
+          cx: mon.x,
+          cz: mon.z,
+          hx: 13.8,
+          hz: 1.5,
+          rotY: 0,
+        });
+        x = res.x;
+        z = res.z;
+      }
+
+      // Botanical Conservatory Glass Dome & Side Wings at (236, 0)
+      if (x >= 198 && x <= 274 && Math.abs(z) <= 26) {
+        let res = pushOutCircle(x, z, playerRadius, { cx: 236, cz: 0, r: 20.6 });
+        res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+          cx: 213,
+          cz: 0,
+          hx: 7.2,
+          hz: 5.2,
+          rotY: 0,
+        });
+        res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+          cx: 259,
+          cz: 0,
+          hx: 7.2,
+          hz: 5.2,
+          rotY: 0,
+        });
+        x = res.x;
+        z = res.z;
+      }
+
+      // Venice Canal Waterways (keep all 35 bridges completely walkable!)
+      if (!isOnBridge(x, z, expansionWorld).onBridge) {
+        for (const c of expansionWorld.canals) {
+          const cx = (c.x1 + c.x2) / 2;
+          const cz = (c.z1 + c.z2) / 2;
+          const isNS = Math.abs(c.z2 - c.z1) > Math.abs(c.x2 - c.x1);
+          const halfLen = Math.hypot(c.x2 - c.x1, c.z2 - c.z1) / 2;
+          const res = pushOutOrientedBox(x, z, playerRadius, {
+            cx,
+            cz,
+            hx: isNS ? c.width / 2 - 0.3 : halfLen,
+            hz: isNS ? halfLen : c.width / 2 - 0.3,
+            rotY: 0,
+          });
+          x = res.x;
+          z = res.z;
+        }
+      }
+
+      // Royal Crescent Garden Fountain at (0, -284)
+      if (Math.abs(x) < 6 && Math.abs(z + 284) < 6) {
+        const res = pushOutCircle(x, z, playerRadius, { cx: 0, cz: -284, r: 3.3 });
+        x = res.x;
+        z = res.z;
+      }
+
+      // Grand Waterfront Lake Water Basin (X in [367..541], Z in [-120..120])
+      // Keeps Western Harbor Boardwalk, Twin Piers (Z=±44), Central Island (446..490, -29..29)
+      // and Island Footbridge (|Z| <= 2.8) completely walkable!
+      if (x >= 365 && x <= 543 && z >= -122 && z <= 122) {
+        const onPier =
+          x >= 366 &&
+          x <= 394.4 &&
+          ((z >= -46.6 && z <= -41.4) || (z >= 41.4 && z <= 46.6));
+        const onIslandBridge = x >= 366 && x <= 542 && Math.abs(z) <= 2.8;
+        const onCentralIsland = x >= 445.5 && x <= 490.5 && Math.abs(z) <= 29.5;
+
+        if (onCentralIsland) {
+          const res = pushOutCircle(x, z, playerRadius, { cx: 468, cz: 0, r: 3.3 });
+          x = res.x;
+          z = res.z;
+        } else if (!onPier && !onIslandBridge) {
+          // North/South outer bands & eastern/western water around island
+          if (Math.abs(z) > 30) {
+            const signZ = z >= 0 ? 1 : -1;
+            const res = pushOutOrientedBox(x, z, playerRadius, {
+              cx: 454,
+              cz: signZ * 75,
+              hx: 87,
+              hz: 44.5,
+              rotY: 0,
+            });
+            x = res.x;
+            z = res.z;
+          } else if (x < 445.5 && x > 367) {
+            const signZ = z >= 0 ? 1 : -1;
+            const res = pushOutOrientedBox(x, z, playerRadius, {
+              cx: 406,
+              cz: signZ * 16.4,
+              hx: 39,
+              hz: 13.4,
+              rotY: 0,
+            });
+            x = res.x;
+            z = res.z;
+          } else if (x > 490.5) {
+            const signZ = z >= 0 ? 1 : -1;
+            const res = pushOutOrientedBox(x, z, playerRadius, {
+              cx: 516,
+              cz: signZ * 16.4,
+              hx: 25,
+              hz: 13.4,
+              rotY: 0,
+            });
+            x = res.x;
+            z = res.z;
+          }
+        }
+      }
+
+      // Expansion Plots within 36m
+      const nearbyExp = queryNearbyExpansionPlots(expansionWorld.spatialIndex, x, z, 36);
+      for (const ep of nearbyExp) {
+        if (ep.status === 'vip') {
+          // Sweet_thedevil Royal Estate at (0, -214): Chateau + Twin Pavilions + Fountain + Marquee
+          let res = pushOutOrientedBox(x, z, playerRadius, {
+            cx: ep.x,
+            cz: ep.z - 3.5,
+            hx: 9.8,
+            hz: 6.2,
+            rotY: 0,
+          });
+          res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+            cx: ep.x - 14.2,
+            cz: ep.z - 3.2,
+            hx: 4.4,
+            hz: 5.0,
+            rotY: 0,
+          });
+          res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+            cx: ep.x + 14.2,
+            cz: ep.z - 3.2,
+            hx: 4.4,
+            hz: 5.0,
+            rotY: 0,
+          });
+          res = pushOutCircle(res.x, res.z, playerRadius, {
+            cx: ep.x,
+            cz: ep.z + 11.8,
+            r: 3.5,
+          });
+          res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+            cx: ep.x,
+            cz: ep.z + 17.5,
+            hx: 3.6,
+            hz: 0.4,
+            rotY: 0,
+          });
+          x = res.x;
+          z = res.z;
+        } else if (ep.houseStyle) {
+          const sin = Math.sin(ep.facingAngle);
+          const cos = Math.cos(ep.facingAngle);
+          const localZ = -1.1;
+          const hx = ep.x + localZ * sin;
+          const hz = ep.z + localZ * cos;
+          const res = pushOutOrientedBox(x, z, playerRadius, {
+            cx: hx,
+            cz: hz,
+            hx: ep.houseStyle.width / 2 + 0.18,
+            hz: ep.houseStyle.depth / 2 + 0.18,
+            rotY: -ep.facingAngle,
+          });
+          x = res.x;
+          z = res.z;
+        }
+      }
     }
   }
 

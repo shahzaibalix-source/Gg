@@ -71,18 +71,16 @@ export const CityCameraController: React.FC<CityCameraControllerProps> = ({
     prevModeRef.current = cameraMode;
 
     if (cameraMode === 'free' && prev !== 'free') {
-      targetRef.current.set(0, 0, 0);
-      freeDistRef.current = 195;
+      freeDistRef.current = THREE.MathUtils.clamp(freeDistRef.current, 14, 1100);
       freePitchRef.current = 0.52;
-      freeYawRef.current = 0.68;
     } else if (cameraMode === 'aerial') {
-      targetRef.current.x = THREE.MathUtils.clamp(targetRef.current.x, -125, 125);
-      targetRef.current.z = THREE.MathUtils.clamp(targetRef.current.z, -125, 125);
-      topHeightRef.current = THREE.MathUtils.clamp(topHeightRef.current, 45, 240);
+      targetRef.current.x = THREE.MathUtils.clamp(targetRef.current.x, -960, 960);
+      targetRef.current.z = THREE.MathUtils.clamp(targetRef.current.z, -960, 960);
+      topHeightRef.current = THREE.MathUtils.clamp(topHeightRef.current, 45, 920);
     } else if (cameraMode === 'isometric') {
-      targetRef.current.x = THREE.MathUtils.clamp(targetRef.current.x, -125, 125);
-      targetRef.current.z = THREE.MathUtils.clamp(targetRef.current.z, -125, 125);
-      distanceRef.current = THREE.MathUtils.clamp(distanceRef.current, 24, 155);
+      targetRef.current.x = THREE.MathUtils.clamp(targetRef.current.x, -960, 960);
+      targetRef.current.z = THREE.MathUtils.clamp(targetRef.current.z, -960, 960);
+      distanceRef.current = THREE.MathUtils.clamp(distanceRef.current, 24, 620);
     }
   }, [cameraMode]);
 
@@ -113,7 +111,7 @@ export const CityCameraController: React.FC<CityCameraControllerProps> = ({
     if (cameraMode === 'walking') return;
     const dom = gl.domElement;
 
-    const getWorldExtent = () => (cameraMode === 'free' ? 480 : 120);
+    const getWorldExtent = () => 960;
 
     const onPointerDown = (e: PointerEvent) => {
       if (cameraMode === 'cinematic') return;
@@ -206,11 +204,11 @@ export const CityCameraController: React.FC<CityCameraControllerProps> = ({
         if (ps.lastPinchDist !== null) {
           const delta = ps.lastPinchDist - dist;
           if (cameraMode === 'aerial') {
-            topHeightRef.current = THREE.MathUtils.clamp(topHeightRef.current + delta * 0.38, 38, 250);
+            topHeightRef.current = THREE.MathUtils.clamp(topHeightRef.current + delta * 0.55, 38, 920);
           } else if (cameraMode === 'free') {
-            freeDistRef.current = THREE.MathUtils.clamp(freeDistRef.current + delta * 0.48, 14, 380);
+            freeDistRef.current = THREE.MathUtils.clamp(freeDistRef.current + delta * 0.65, 14, 1100);
           } else {
-            distanceRef.current = THREE.MathUtils.clamp(distanceRef.current + delta * 0.28, 18, 160);
+            distanceRef.current = THREE.MathUtils.clamp(distanceRef.current + delta * 0.45, 18, 620);
           }
         }
 
@@ -271,15 +269,15 @@ export const CityCameraController: React.FC<CityCameraControllerProps> = ({
       if (cameraMode === 'cinematic') return;
       e.preventDefault();
       if (cameraMode === 'aerial') {
-        topHeightRef.current = THREE.MathUtils.clamp(topHeightRef.current + e.deltaY * 0.11, 38, 250);
+        topHeightRef.current = THREE.MathUtils.clamp(topHeightRef.current + e.deltaY * 0.22, 38, 920);
       } else if (cameraMode === 'free') {
         freeDistRef.current = THREE.MathUtils.clamp(
-          freeDistRef.current + e.deltaY * 0.14,
+          freeDistRef.current + e.deltaY * 0.26,
           14,
-          380,
+          1100,
         );
       } else {
-        distanceRef.current = THREE.MathUtils.clamp(distanceRef.current + e.deltaY * 0.08, 18, 160);
+        distanceRef.current = THREE.MathUtils.clamp(distanceRef.current + e.deltaY * 0.16, 18, 620);
       }
     };
 
@@ -304,7 +302,7 @@ export const CityCameraController: React.FC<CityCameraControllerProps> = ({
   useFrame((state, delta) => {
     if (cameraMode === 'walking') return;
     const dt = Math.min(delta, 0.05);
-    const extent = cameraMode === 'free' ? 480 : 120;
+    const extent = 960;
 
     // Handle quick district / plot focus requests
     if (focusTargetRef.current) {
@@ -330,22 +328,22 @@ export const CityCameraController: React.FC<CityCameraControllerProps> = ({
         _desiredPos.set(-34 + Math.sin(p) * 18, 22, 34 + Math.cos(p) * 34);
       } else if (cinematicTour === 'luxury-flyover') {
         const p = t * 0.2;
-        _desiredLook.set(-52, 2.5, -52);
-        _desiredPos.set(-52 + Math.cos(p) * 32, 18 + Math.sin(p * 1.5) * 3, -52 + Math.sin(p) * 32);
+        _desiredLook.set(0, 5.5, -214);
+        _desiredPos.set(Math.cos(p) * 58, 28 + Math.sin(p * 1.5) * 4, -214 + Math.sin(p) * 58);
       } else if (cinematicTour === 'commercial-park-tour') {
         const p = t * 0.14;
         const mix = (Math.sin(p) + 1) * 0.5;
-        _desiredLook.set(THREE.MathUtils.lerp(0, 52, mix), 2.5, THREE.MathUtils.lerp(52, -10, mix));
+        _desiredLook.set(THREE.MathUtils.lerp(236, 446, mix), 4.0, THREE.MathUtils.lerp(0, 0, mix));
         _desiredPos.set(
-          THREE.MathUtils.lerp(24, 76, mix),
-          23,
-          THREE.MathUtils.lerp(76, 20, mix),
+          THREE.MathUtils.lerp(220, 410, mix),
+          54,
+          THREE.MathUtils.lerp(82, 95, mix),
         );
       } else {
         // full-town-loop
-        const a = t * 0.12;
-        _desiredLook.set(Math.sin(a * 0.5) * 12, 1.5, Math.cos(a * 0.5) * 12);
-        _desiredPos.set(Math.sin(a) * 115, 58 + Math.sin(t * 0.25) * 8, Math.cos(a) * 115);
+        const a = t * 0.09;
+        _desiredLook.set(Math.sin(a * 0.5) * 60, 4.0, Math.cos(a * 0.5) * 60);
+        _desiredPos.set(Math.sin(a) * 360, 180 + Math.sin(t * 0.25) * 18, Math.cos(a) * 360);
       }
 
       camera.position.x = THREE.MathUtils.damp(camera.position.x, _desiredPos.x, 3.5, dt);
@@ -372,10 +370,10 @@ export const CityCameraController: React.FC<CityCameraControllerProps> = ({
       if (keys.has('KeyQ')) freeYawRef.current -= dt * 1.4;
       if (keys.has('KeyE')) freeYawRef.current += dt * 1.4;
       if (keys.has('KeyR')) {
-        freeDistRef.current = THREE.MathUtils.clamp(freeDistRef.current + dt * 95, 14, 380);
+        freeDistRef.current = THREE.MathUtils.clamp(freeDistRef.current + dt * 140, 14, 1100);
       }
       if (keys.has('KeyF')) {
-        freeDistRef.current = THREE.MathUtils.clamp(freeDistRef.current - dt * 95, 14, 380);
+        freeDistRef.current = THREE.MathUtils.clamp(freeDistRef.current - dt * 140, 14, 1100);
       }
     }
 

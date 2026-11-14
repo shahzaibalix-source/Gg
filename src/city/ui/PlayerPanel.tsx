@@ -1,11 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Award,
   Compass,
+  Crown,
   ExternalLink,
   Eye,
   Footprints,
   Globe,
   Home,
+  Map as MapIcon,
   MapPin,
   Navigation,
   Sparkles,
@@ -23,6 +26,8 @@ import {
 import { DISTRICTS } from '../world/MasterTownBlueprint';
 import { getNearbyPlaces } from '../interaction/WorldInteractions';
 import { sanitizeInstagramUrl } from '../firebase/firebaseClient';
+import { EXPANSION_LANDMARKS, ExpansionCityWorld } from '../expansion/ExpansionMasterPlan';
+import { ExpansionPlotSpec } from '../expansion/types';
 
 export type PlayerPanelTab = 'menu' | 'explore' | 'house' | 'profile' | 'nearby' | 'interactions';
 
@@ -30,6 +35,7 @@ interface PlayerPanelProps {
   open: boolean;
   cameraMode: CameraMode;
   plots: TownPlot[];
+  expansionWorld?: ExpansionCityWorld | null;
   playerProfile: PlayerProfile;
   playerCoords: { x: number; z: number };
   activeInteraction: NearbyInteractable | null;
@@ -39,6 +45,9 @@ interface PlayerPanelProps {
   onChangeCameraMode: (mode: CameraMode) => void;
   onFocusLocation: (x: number, z: number, zoom?: number) => void;
   onSelectPlot: (plot: TownPlot | null) => void;
+  onSelectExpansionPlot?: (plot: ExpansionPlotSpec | null) => void;
+  onOpenCityMap?: () => void;
+  onOpenMonumentModal?: () => void;
   onUpdateProfile: (patch: Partial<PlayerProfile>) => void;
   onTriggerInteraction: (actionId: InteractionActionId) => void;
 }
@@ -60,6 +69,7 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   open,
   cameraMode,
   plots,
+  expansionWorld,
   playerProfile,
   playerCoords,
   activeInteraction,
@@ -69,14 +79,17 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
   onChangeCameraMode,
   onFocusLocation,
   onSelectPlot,
+  onSelectExpansionPlot,
+  onOpenCityMap,
+  onOpenMonumentModal,
   onUpdateProfile,
   onTriggerInteraction,
 }) => {
   const [activeTab, setActiveTab] = useState<PlayerPanelTab>('menu');
 
   const nearbyPlaces = useMemo(
-    () => getNearbyPlaces(playerCoords.x, playerCoords.z, plots, 10),
-    [playerCoords.x, playerCoords.z, plots],
+    () => getNearbyPlaces(playerCoords.x, playerCoords.z, plots, 12, expansionWorld),
+    [playerCoords.x, playerCoords.z, plots, expansionWorld],
   );
 
   const openResidentialPlots = useMemo(
@@ -194,6 +207,47 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
             </div>
 
             <div className="grid grid-cols-1 gap-1.5 pt-1">
+              {onOpenCityMap && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenCityMap();
+                    onClose();
+                  }}
+                  className="min-h-[44px] flex items-center justify-between px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 text-left cursor-pointer"
+                >
+                  <span className="flex items-center gap-2.5 text-xs font-semibold text-amber-200">
+                    <MapIcon className="w-4 h-4 text-amber-400" />
+                    <span>Complete City Map &amp; House Finder</span>
+                  </span>
+                  <span className="text-[11px] text-amber-300 font-mono-tabular">
+                    {expansionWorld
+                      ? `${(
+                          expansionWorld.counts.ogCount + expansionWorld.counts.residentHouseCount
+                        ).toLocaleString()}`
+                      : 'Map'}{' '}
+                    →
+                  </span>
+                </button>
+              )}
+
+              {onOpenMonumentModal && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenMonumentModal();
+                    onClose();
+                  }}
+                  className="min-h-[44px] flex items-center justify-between px-3 py-2 rounded-lg bg-[#19212c] hover:bg-[#222c3a] border border-amber-400/25 text-left cursor-pointer"
+                >
+                  <span className="flex items-center gap-2.5 text-xs font-medium text-white">
+                    <Award className="w-4 h-4 text-amber-400" />
+                    <span>OG 50 Recognition Monument</span>
+                  </span>
+                  <span className="text-[11px] text-amber-300">50 Founders →</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setActiveTab('explore')}
@@ -203,7 +257,9 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
                   <MapPin className="w-4 h-4 text-emerald-400" />
                   <span>Explore Town</span>
                 </span>
-                <span className="text-[11px] text-slate-400">7 Areas →</span>
+                <span className="text-[11px] text-slate-400">
+                  {DISTRICTS.length + (expansionWorld ? expansionWorld.landmarks.length : 0)} Areas →
+                </span>
               </button>
 
               <button
@@ -264,25 +320,57 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
         )}
 
         {activeTab === 'explore' && (
-          <div className="space-y-1.5">
-            <p className="text-[11px] text-slate-400">
-              Jump straight to any district in Lindenhof:
-            </p>
-            {DISTRICTS.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                onClick={() => {
-                  const walkDestZ = d.id === 'central-square' ? 16.5 : d.center.z;
-                  visitPoint(d.center.x, walkDestZ);
-                  onClose();
-                }}
-                className="w-full min-h-[44px] px-3 py-2 rounded-lg bg-[#19212c] hover:bg-[#222c3a] border border-white/10 text-left cursor-pointer"
-              >
-                <div className="text-xs font-semibold text-white">{d.name}</div>
-                <div className="text-[11px] text-slate-400">{d.subtitle}</div>
-              </button>
-            ))}
+          <div className="space-y-2.5">
+            {expansionWorld && (
+              <div className="space-y-1.5">
+                <p className="text-[11px] font-semibold text-amber-300 flex items-center gap-1.5">
+                  <Crown className="w-3.5 h-3.5" />
+                  <span>Expanded City Districts &amp; Landmarks</span>
+                </p>
+                {(expansionWorld.landmarks.length > 0
+                  ? expansionWorld.landmarks
+                  : EXPANSION_LANDMARKS
+                ).map((lm) => (
+                  <button
+                    key={lm.id}
+                    type="button"
+                    onClick={() => {
+                      if (lm.category === 'vip-palace' && expansionWorld.vipPlot) {
+                        onSelectPlot(null);
+                        onSelectExpansionPlot?.(expansionWorld.vipPlot);
+                      }
+                      visitPoint(lm.x, lm.z);
+                      onClose();
+                    }}
+                    className="w-full min-h-[44px] px-3 py-2 rounded-lg bg-[#19212c] hover:bg-[#222c3a] border border-amber-400/20 text-left cursor-pointer"
+                  >
+                    <div className="text-xs font-semibold text-amber-200">{lm.title}</div>
+                    <div className="text-[11px] text-slate-400">{lm.subtitle}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-slate-400">
+                Core Historic Lindenhof Districts:
+              </p>
+              {DISTRICTS.map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  onClick={() => {
+                    const walkDestZ = d.id === 'central-square' ? 16.5 : d.center.z;
+                    visitPoint(d.center.x, walkDestZ);
+                    onClose();
+                  }}
+                  className="w-full min-h-[44px] px-3 py-2 rounded-lg bg-[#19212c] hover:bg-[#222c3a] border border-white/10 text-left cursor-pointer"
+                >
+                  <div className="text-xs font-semibold text-white">{d.name}</div>
+                  <div className="text-[11px] text-slate-400">{d.subtitle}</div>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -384,6 +472,26 @@ export const PlayerPanel: React.FC<PlayerPanelProps> = ({
                 key={place.id}
                 type="button"
                 onClick={() => {
+                  if (place.expansionPlotId && expansionWorld) {
+                    const ep = expansionWorld.plotById.get(place.expansionPlotId) ?? null;
+                    if (ep) {
+                      onSelectPlot(null);
+                      onSelectExpansionPlot?.(ep);
+                      const approachDist = ep.depth / 2 + 2.5;
+                      const tx =
+                        cameraMode === 'walking'
+                          ? ep.x + Math.sin(ep.facingAngle) * approachDist
+                          : ep.x;
+                      const tz =
+                        cameraMode === 'walking'
+                          ? ep.z + Math.cos(ep.facingAngle) * approachDist
+                          : ep.z;
+                      onFocusLocation(tx, tz, cameraMode === 'walking' ? 38 : 42);
+                      onClose();
+                      return;
+                    }
+                  }
+                  onSelectExpansionPlot?.(null);
                   visitPoint(place.x, place.z, place.plot);
                   onClose();
                 }}

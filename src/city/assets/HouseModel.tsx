@@ -475,6 +475,21 @@ export const HouseModel: React.FC<HouseModelProps> = ({
             emissive={windowEmissive}
             emissiveIntensity={windowEmissiveIntensity}
           />
+          {(archetype === 'cottage' || archetype === 'mediterranean') && (
+            <group position={[wx, plinthH + 0.62, frontZ + 0.15]}>
+              <mesh castShadow>
+                <boxGeometry args={[1.15, 0.18, 0.22]} />
+                <meshStandardMaterial color="#6e472d" roughness={0.85} />
+              </mesh>
+              <mesh position={[0, 0.12, 0]}>
+                <boxGeometry args={[1.05, 0.13, 0.16]} />
+                <meshStandardMaterial
+                  color={archetype === 'mediterranean' ? '#f472b6' : '#fb7185'}
+                  roughness={0.78}
+                />
+              </mesh>
+            </group>
+          )}
           {/* Second floor window */}
           <WindowAssembly
             position={[wx, plinthH + bodyH * 0.72, frontZ + 0.03]}

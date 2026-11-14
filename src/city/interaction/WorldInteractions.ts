@@ -2,6 +2,7 @@ import { NearbyInteractable, TownPlot } from '../types';
 import { PARKED_CARS, TOWN_BENCHES } from '../world/MasterTownBlueprint';
 import { DynamicVehicleObstacle } from '../simulation/WorldCollision';
 import { townMultiplayerService } from '../services/TownServices';
+import { ExpansionCityWorld, queryNearbyExpansionPlots } from '../expansion/ExpansionMasterPlan';
 
 export interface InteractionQueryContext {
   playerX: number;
@@ -10,6 +11,7 @@ export interface InteractionQueryContext {
   plots: TownPlot[];
   openDoors: Record<string, boolean>;
   dynamicVehicles: DynamicVehicleObstacle[];
+  expansionWorld?: ExpansionCityWorld | null;
 }
 
 const PARK_LANDMARKS: Array<{
@@ -52,6 +54,22 @@ const PARK_LANDMARKS: Array<{
     z: 8.8,
     radius: 6.5,
   },
+  {
+    id: 'park-botanical-conservatory',
+    title: 'Lindenhof Botanical Conservatory',
+    subtitle: 'Grand glasshouse dome, geometric floral parterres & rose arboretum',
+    x: 236,
+    z: 0,
+    radius: 26,
+  },
+  {
+    id: 'park-waterfront-harbor',
+    title: 'Grand Lake & Waterfront Pier',
+    subtitle: 'Timber harbor boardwalk, lakeside piers & moored European sailboats',
+    x: 378,
+    z: 0,
+    radius: 24,
+  },
 ];
 
 /**
@@ -62,7 +80,8 @@ const PARK_LANDMARKS: Array<{
 export function resolveActiveWorldInteraction(
   ctx: InteractionQueryContext,
 ): NearbyInteractable | null {
-  const { playerX, playerZ, sittingBenchId, plots, openDoors, dynamicVehicles } = ctx;
+  const { playerX, playerZ, sittingBenchId, plots, openDoors, dynamicVehicles, expansionWorld } =
+    ctx;
 
   // When seated on a bench, return only the active seated Stand Up prompt
   if (sittingBenchId) {
@@ -88,7 +107,7 @@ export function resolveActiveWorldInteraction(
       const occupant = townMultiplayerService.getBenchOccupant(bench.id);
       const occupiedByOther = Boolean(occupant && occupant !== localUserId);
       candidates.push({
-        score: d * 0.72, // Slight priority when standing right beside a bench
+        score: d * 0.72,
         item: {
           uid: `bench:${bench.id}`,
           kind: 'bench',
@@ -145,11 +164,10 @@ export function resolveActiveWorldInteraction(
     }
   }
 
-  // 3. Houses, Commercial Shops, Civic & Public Buildings (approach doorway or front yard)
+  // 3. Core Houses, Commercial Shops, Civic & Public Buildings
   for (const plot of plots) {
     const sin = Math.sin(plot.facingAngle);
     const cos = Math.cos(plot.facingAngle);
-    // Compute world position of the front doorway/entrance
     const doorLocalZ = plot.house
       ? plot.house.depth / 2 - 1.0
       : plot.business
@@ -226,7 +244,89 @@ export function resolveActiveWorldInteraction(
     }
   }
 
-  // 4. Park Landmarks & Plazas
+  // 4. OG 50 Monument Recognition Wall & Expanded Follower City Plots (Spatial Hash O(1))
+  if (expansionWorld) {
+    const monPos = expansionWorld.monumentPosition;
+    const dMon = Math.hypot(playerX - monPos.x, playerZ - monPos.z);
+    if (dMon <= 16.5) {
+      candidates.push({
+        score: Math.max(0.8, dMon - 3.5),
+        item: {
+          uid: 'civic:og-monument',
+          kind: 'civic',
+          title: 'OG 50 Founders Recognition Wall',
+          subtitle: 'Featuring Special #1 VIP Sweet_thedevil & all 50 OG Members',
+          distance: dMon,
+          actions: [{ id: 'open-og-monument', label: 'View 50 OG Monument' }],
+        },
+      });
+    }
+
+    const nearbyExp = queryNearbyExpansionPlots(expansionWorld.spatialIndex, playerX, playerZ, 28);
+    for (const ep of nearbyExp) {
+      const sin = Math.sin(ep.facingAngle);
+      const cos = Math.cos(ep.facingAngle);
+      const doorLocalZ = ep.status === 'vip' ? 18.5 : ep.depth / 2 - 1.0;
+      const doorX = ep.x + doorLocalZ * sin;
+      const doorZ = ep.z + doorLocalZ * cos;
+      const dDoor = Math.hypot(playerX - doorX, playerZ - doorZ);
+      const dCenter = Math.hypot(playerX - ep.x, playerZ - ep.z);
+
+      if (ep.status === 'vip' && (dDoor <= 14 || dCenter <= 25)) {
+        candidates.push({
+          score: Math.max(0.9, Math.min(dDoor, dCenter) - 2.0),
+          item: {
+            uid: `exp:${ep.plotId}`,
+            kind: 'house',
+            title: 'Sweet_thedevil Royal VIP Estate',
+            subtitle: `${ep.plotCode} · ${ep.resident?.residentId ?? 'RES-0001'} · Special #1 Honoree`,
+            distance: Math.min(dDoor, dCenter),
+            expansionPlotId: ep.plotId,
+            actions: [
+              { id: 'view-house', label: 'Inspect Royal Estate' },
+              { id: 'open-og-monument', label: 'OG 50 Monument' },
+            ],
+          },
+        });
+      } else if (ep.houseStyle && dDoor <= 6.8) {
+        const isOpen = Boolean(openDoors[ep.plotId]);
+        const tierLabel = ep.status === 'og' ? `OG #${ep.resident?.ogRank ?? ''}` : ep.plotCode;
+        candidates.push({
+          score: dDoor,
+          item: {
+            uid: `exp:${ep.plotId}`,
+            kind: 'house',
+            title: ep.resident
+              ? `@${ep.resident.username}'s ${ep.status === 'og' ? 'OG Mansion' : 'Home'}`
+              : `Plot ${ep.plotCode}`,
+            subtitle: `${tierLabel} · ${ep.resident?.residentId ?? ''} · ${ep.districtName}`,
+            distance: dDoor,
+            expansionPlotId: ep.plotId,
+            actions: [
+              { id: 'view-house', label: 'View House' },
+              { id: 'view-owner', label: 'View Owner' },
+              { id: 'toggle-door', label: isOpen ? 'Close Door' : 'Open Door' },
+            ],
+          },
+        });
+      } else if (!ep.houseStyle && dCenter <= 7.2) {
+        candidates.push({
+          score: dCenter,
+          item: {
+            uid: `exp:${ep.plotId}`,
+            kind: 'house',
+            title: `Open Expansion Parcel ${ep.plotCode}`,
+            subtitle: ep.districtName,
+            distance: dCenter,
+            expansionPlotId: ep.plotId,
+            actions: [{ id: 'view-house', label: 'View Parcel' }],
+          },
+        });
+      }
+    }
+  }
+
+  // 5. Park Landmarks & Plazas
   for (const lm of PARK_LANDMARKS) {
     const d = Math.hypot(playerX - lm.x, playerZ - lm.z);
     if (d <= lm.radius) {
@@ -260,6 +360,7 @@ export interface NearbyPlaceSummary {
   x: number;
   z: number;
   plot?: TownPlot;
+  expansionPlotId?: string;
 }
 
 /**
@@ -271,6 +372,7 @@ export function getNearbyPlaces(
   refZ: number,
   plots: TownPlot[],
   limit = 10,
+  expansionWorld?: ExpansionCityWorld | null,
 ): NearbyPlaceSummary[] {
   const list: NearbyPlaceSummary[] = [];
 
@@ -299,6 +401,39 @@ export function getNearbyPlaces(
       z: p.center.z,
       plot: p,
     });
+  }
+
+  if (expansionWorld) {
+    for (const lm of expansionWorld.landmarks) {
+      list.push({
+        id: lm.id,
+        label: lm.title,
+        category: 'Expanded City Landmark',
+        distance: Math.hypot(refX - lm.x, refZ - lm.z),
+        x: lm.x,
+        z: lm.z,
+      });
+    }
+
+    const nearbyExp = queryNearbyExpansionPlots(expansionWorld.spatialIndex, refX, refZ, 110);
+    for (const ep of nearbyExp) {
+      list.push({
+        id: ep.plotId,
+        label: ep.resident ? `@${ep.resident.username} (${ep.plotCode})` : `Open ${ep.plotCode}`,
+        category:
+          ep.status === 'vip'
+            ? 'Special #1 VIP Palace'
+            : ep.status === 'og'
+              ? 'OG 50 Mansion'
+              : ep.status === 'occupied'
+                ? ep.districtName
+                : 'Future Expansion Plot',
+        distance: Math.hypot(refX - ep.x, refZ - ep.z),
+        x: ep.x,
+        z: ep.z,
+        expansionPlotId: ep.plotId,
+      });
+    }
   }
 
   for (const lm of PARK_LANDMARKS) {

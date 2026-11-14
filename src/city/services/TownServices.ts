@@ -67,12 +67,34 @@ export class LocalVerificationStub implements IVerificationProvider {
  */
 export class LocalMultiplayerStub implements IMultiplayerProvider {
   public readonly isConnected = false;
-  public readonly transportLabel = 'Session Local Simulation (Login-Free)';
+  public readonly transportLabel = 'Session Local Simulation (Multi-Tab Sync)';
   private sessionId: string;
   private readonly benchOccupants: Map<string, string> = new Map();
+  private channel: BroadcastChannel | null = null;
 
   constructor() {
     this.sessionId = `visitor-${Math.random().toString(36).slice(2, 8)}`;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.channel = new BroadcastChannel('lindenhof-local-presence');
+        this.channel.onmessage = (event: MessageEvent) => {
+          const msg = event.data as
+            | { type: 'occupy'; benchId: string; userId: string }
+            | { type: 'release'; benchId: string; userId: string }
+            | undefined;
+          if (!msg) return;
+          if (msg.type === 'occupy') {
+            this.benchOccupants.set(msg.benchId, msg.userId);
+          } else if (msg.type === 'release') {
+            if (this.benchOccupants.get(msg.benchId) === msg.userId) {
+              this.benchOccupants.delete(msg.benchId);
+            }
+          }
+        };
+      } catch {
+        this.channel = null;
+      }
+    }
   }
 
   public getSessionUserId(): string {
@@ -115,12 +137,14 @@ export class LocalMultiplayerStub implements IMultiplayerProvider {
     const existing = this.benchOccupants.get(benchId);
     if (existing && existing !== userId) return false;
     this.benchOccupants.set(benchId, userId);
+    this.channel?.postMessage({ type: 'occupy', benchId, userId });
     return true;
   }
 
   public releaseBench(benchId: string, userId = this.sessionId): void {
     if (this.benchOccupants.get(benchId) === userId) {
       this.benchOccupants.delete(benchId);
+      this.channel?.postMessage({ type: 'release', benchId, userId });
     }
   }
 }

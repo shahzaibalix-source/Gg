@@ -459,7 +459,7 @@ export class CityRegistry {
       };
     }
 
-    const cleanName = inGameUsername.trim().slice(0, 24);
+    const cleanName = inGameUsername.trim().slice(0, 32);
     if (!cleanName) return { ok: false, error: 'In-game username is required.' };
 
     const duplicate = this.isUsernameAssignedElsewhere(cleanName, plotId);
@@ -507,7 +507,7 @@ export class CityRegistry {
       };
     }
 
-    const cleanName = newInGameUsername.trim().slice(0, 24);
+    const cleanName = newInGameUsername.trim().slice(0, 32);
     if (!cleanName) {
       return { ok: false, previousUsername: plot.ownerUsername, error: 'In-game username is required.' };
     }
@@ -611,7 +611,7 @@ export class CityRegistry {
   public claimOrOpenBusiness(plotId: string, ownerUsername: string): TownPlot | null {
     const plot = this.plots.get(plotId);
     if (!plot || !plot.business) return null;
-    const clean = ownerUsername.trim().slice(0, 24);
+    const clean = ownerUsername.trim().slice(0, 24 > 0 ? 32 : 32);
     if (!clean) return null;
 
     const updated: TownPlot = {
@@ -742,5 +742,43 @@ export class CityRegistry {
     this.plots.set(targetPlotId, updatedDst);
     this.plots.set(sourcePlotId, clearedSrc);
     return { ok: true, dstPlot: updatedDst, srcPlot: clearedSrc };
+  }
+
+  /**
+   * Restores a single plot snapshot (used to roll back optimistic UI state on Firestore failure).
+   */
+  public restorePlot(snapshot: TownPlot): void {
+    this.plots.set(snapshot.id, snapshot);
+  }
+
+  /**
+   * Editor: Demolish a non-civic house or business on a plot, returning it to an empty available plot.
+   */
+  public removeBuildingFromPlot(
+    plotId: string,
+  ): { ok: boolean; previousUsername: string | null; plot?: TownPlot; error?: string } {
+    const plot = this.plots.get(plotId);
+    if (!plot) return { ok: false, previousUsername: null, error: 'Plot does not exist.' };
+    if (plot.publicBuilding || plot.category === 'public') {
+      return { ok: false, previousUsername: null, error: 'Civic buildings cannot be demolished.' };
+    }
+    if (!plot.house && !plot.business) {
+      return { ok: false, previousUsername: null, error: 'Plot has no building to demolish.' };
+    }
+
+    const previousUsername = plot.ownerUsername;
+    const cleared: TownPlot = {
+      ...plot,
+      house: null,
+      business: null,
+      ownershipStatus: 'available',
+      ownerUid: null,
+      ownerUsername: null,
+      verificationState: 'none',
+      claimedAt: null,
+      upgradeLevel: 1,
+    };
+    this.plots.set(plotId, cleared);
+    return { ok: true, previousUsername, plot: cleared };
   }
 }

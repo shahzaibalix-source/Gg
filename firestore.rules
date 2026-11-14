@@ -36,7 +36,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isVerifiedUser() && (
-        request.auth.token.email == 'shahzaibalix@gmail.com' ||
+        request.auth.token.email in ['knightrepacks@gmail.com', 'shahzaibalix@gmail.com'] ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
@@ -93,7 +93,7 @@ service cloud.firestore {
         data.facingAngle is number &&
         data.ownershipStatus in ['occupied', 'available', 'reserved', 'civic'] &&
         data.ownerUid is string && data.ownerUid.size() <= 128 &&
-        data.ownerUsername is string && data.ownerUsername.size() <= 24 &&
+        data.ownerUsername is string && data.ownerUsername.size() <= 32 &&
         data.verificationState in ['unverified-local', 'pending-oauth', 'verified-community', 'none'] &&
         data.claimedAt is string && data.claimedAt.size() <= 20 &&
         data.upgradeLevel is int && data.upgradeLevel >= 1 && data.upgradeLevel <= 3 &&
@@ -103,7 +103,7 @@ service cloud.firestore {
         data.hasBalcony is bool &&
         data.businessCategory is string && data.businessCategory.size() <= 24 &&
         data.businessName is string && data.businessName.size() <= 48 &&
-        data.businessOwnerUsername is string && data.businessOwnerUsername.size() <= 24 &&
+        data.businessOwnerUsername is string && data.businessOwnerUsername.size() <= 32 &&
         data.businessStatus in ['open', 'upgrading', 'available', 'none'] &&
         data.businessLevel is int && data.businessLevel >= 1 && data.businessLevel <= 3 &&
         data.businessDailyRevenue is int && data.businessDailyRevenue >= 0 && data.businessDailyRevenue <= 50000 &&
@@ -164,7 +164,7 @@ service cloud.firestore {
           'updatedAt'
         ]) &&
         data.plotId is string && data.plotId == pathPlotId && data.plotId.size() <= 64 &&
-        data.inGameUsername is string && data.inGameUsername.size() >= 1 && data.inGameUsername.size() <= 24 &&
+        data.inGameUsername is string && data.inGameUsername.size() >= 1 && data.inGameUsername.size() <= 32 &&
         data.instagramHandle is string && data.instagramHandle.size() >= 1 && data.instagramHandle.size() <= 40 &&
         data.notes is string && data.notes.size() <= 200 &&
         data.approvedByUid is string && data.approvedByUid.size() >= 1 && data.approvedByUid.size() <= 128 &&
@@ -191,6 +191,77 @@ service cloud.firestore {
         data.grantedAt is timestamp;
     }
 
+    function isValidExpansionManifest(data) {
+      return data.keys().hasAll([
+          'sourceArchiveName',
+          'totalRawFollowers',
+          'uniqueFollowers',
+          'duplicatesRemoved',
+          'ogCount',
+          'remainingResidents',
+          'expansionOpenPlots',
+          'vipUsername',
+          'vipPlotCode',
+          'shardCount',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'sourceArchiveName',
+          'totalRawFollowers',
+          'uniqueFollowers',
+          'duplicatesRemoved',
+          'ogCount',
+          'remainingResidents',
+          'expansionOpenPlots',
+          'vipUsername',
+          'vipPlotCode',
+          'shardCount',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.sourceArchiveName is string && data.sourceArchiveName.size() >= 1 && data.sourceArchiveName.size() <= 160 &&
+        data.totalRawFollowers is int && data.totalRawFollowers >= 1 && data.totalRawFollowers <= 500000 &&
+        data.uniqueFollowers is int && data.uniqueFollowers >= 1 && data.uniqueFollowers <= 500000 &&
+        data.duplicatesRemoved is int && data.duplicatesRemoved >= 0 && data.duplicatesRemoved <= 500000 &&
+        data.ogCount is int && data.ogCount >= 0 && data.ogCount <= 50 &&
+        data.remainingResidents is int && data.remainingResidents >= 0 && data.remainingResidents <= 500000 &&
+        data.expansionOpenPlots is int && data.expansionOpenPlots >= 0 && data.expansionOpenPlots <= 500000 &&
+        data.vipUsername is string && data.vipUsername.size() >= 1 && data.vipUsername.size() <= 32 &&
+        data.vipPlotCode is string && data.vipPlotCode.size() >= 1 && data.vipPlotCode.size() <= 24 &&
+        data.shardCount is int && data.shardCount >= 1 && data.shardCount <= 500 &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidDirectoryShard(data, pathShardId) {
+      return data.keys().hasAll([
+          'shardId',
+          'shardIndex',
+          'totalShards',
+          'entries',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'shardId',
+          'shardIndex',
+          'totalShards',
+          'entries',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        isValidId(data.shardId) &&
+        data.shardId == pathShardId &&
+        data.shardId.size() <= 64 &&
+        data.shardIndex is int && data.shardIndex >= 0 && data.shardIndex <= 500 &&
+        data.totalShards is int && data.totalShards >= 1 && data.totalShards <= 500 &&
+        data.entries is list && data.entries.size() <= 200 &&
+        (data.entries.size() == 0 || data.entries[0] is map) &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        data.updatedAt is timestamp;
+    }
+
     // -------------------------------------------------------------------------
     // Collection Rules
     // -------------------------------------------------------------------------
@@ -213,9 +284,9 @@ service cloud.firestore {
       allow delete: if isAdmin() && isValidId(plotId);
     }
 
-    // Public Town Metadata (`economy`, `settings`): Public read; ONLY Super Admin can write.
+    // Public Town Metadata (`economy`, `settings`, `expansion_manifest`): Public read; ONLY Super Admin can write.
     match /town_meta/{docId} {
-      allow get: if isValidId(docId) && docId in ['economy', 'settings'];
+      allow get: if isValidId(docId) && docId in ['economy', 'settings', 'expansion_manifest'];
       allow list: if false;
       allow create, update: if isAdmin() &&
         isValidId(docId) &&
@@ -231,9 +302,27 @@ service cloud.firestore {
             isValidTownSettings(incoming()) &&
             incoming().updatedByUid == request.auth.uid &&
             incoming().updatedAt == request.time
+          ) ||
+          (
+            docId == 'expansion_manifest' &&
+            isValidExpansionManifest(incoming()) &&
+            incoming().updatedByUid == request.auth.uid &&
+            incoming().updatedAt == request.time
           )
         );
       allow delete: if false;
+    }
+
+    // Public Follower City Resident Directory Shards: Public read-only; ONLY Super Admin can write/replace.
+    match /resident_directory_shards/{shardId} {
+      allow get: if isValidId(shardId);
+      allow list: if true;
+      allow create, update: if isAdmin() &&
+        isValidId(shardId) &&
+        isValidDirectoryShard(incoming(), shardId) &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(shardId);
     }
 
     // Private Resident Records (Instagram handles & review notes): Strictly Super Admin ONLY.

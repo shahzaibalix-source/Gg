@@ -26,7 +26,7 @@
         "ownerUsername": {
           "type": "string",
           "description": "Publicly displayed in-game resident username (no private contact details).",
-          "maxLength": 24
+          "maxLength": 32
         },
         "verificationState": {
           "type": "string",
@@ -63,7 +63,7 @@
         },
         "businessOwnerUsername": {
           "type": "string",
-          "maxLength": 24
+          "maxLength": 32
         },
         "businessStatus": {
           "type": "string",
@@ -188,7 +188,7 @@
         "inGameUsername": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 24
+          "maxLength": 32
         },
         "instagramHandle": {
           "type": "string",
@@ -280,6 +280,53 @@
         }
       }
     },
+    "ExpansionManifestDoc": {
+      "title": "Expansion Follower City Manifest",
+      "description": "Publicly readable summary of verified imported followers, OG 50 counts, VIP #1 username, and shard count. Writable solely by Super Admin.",
+      "type": "object",
+      "properties": {
+        "sourceArchiveName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "totalRawFollowers": { "type": "integer" },
+        "uniqueFollowers": { "type": "integer" },
+        "duplicatesRemoved": { "type": "integer" },
+        "ogCount": { "type": "integer" },
+        "remainingResidents": { "type": "integer" },
+        "expansionOpenPlots": { "type": "integer" },
+        "vipUsername": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "vipPlotCode": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "shardCount": { "type": "integer" },
+        "updatedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "sourceArchiveName",
+        "totalRawFollowers",
+        "uniqueFollowers",
+        "duplicatesRemoved",
+        "ogCount",
+        "remainingResidents",
+        "expansionOpenPlots",
+        "vipUsername",
+        "vipPlotCode",
+        "shardCount",
+        "updatedByUid",
+        "updatedAt"
+      ]
+    },
+    "ResidentDirectoryShardDoc": {
+      "title": "Resident Directory Shard",
+      "description": "Publicly readable compacted directory shard containing up to 200 follower resident assignments.",
+      "type": "object",
+      "properties": {
+        "shardId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "shardIndex": { "type": "integer" },
+        "totalShards": { "type": "integer" },
+        "entries": { "type": "array" },
+        "updatedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["shardId", "shardIndex", "totalShards", "entries", "updatedByUid", "updatedAt"]
+    },
     "ConnectionTestDoc": {
       "title": "Firestore Boot Connection Probe",
       "description": "Read-only connection verification document.",
@@ -303,6 +350,14 @@
     "/town_meta/settings": {
       "schema": { "$ref": "#/entities/TownSettingsDoc" },
       "description": "Publicly readable welcome screen copy & Instagram profile link; writable exclusively by Super Admin."
+    },
+    "/town_meta/expansion_manifest": {
+      "schema": { "$ref": "#/entities/ExpansionManifestDoc" },
+      "description": "Publicly readable imported follower directory metadata; writable exclusively by Super Admin."
+    },
+    "/resident_directory_shards/{shardId}": {
+      "schema": { "$ref": "#/entities/ResidentDirectoryShardDoc" },
+      "description": "Publicly readable compacted shards of permanent follower plot & resident ID assignments; writable exclusively by Super Admin."
     },
     "/resident_records/{plotId}": {
       "schema": { "$ref": "#/entities/PrivateResidentRecordDoc" },

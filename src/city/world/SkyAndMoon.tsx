@@ -217,7 +217,7 @@ export const SkyAndMoon: React.FC<SkyAndMoonProps> = ({
       const theta = rand() * Math.PI * 2;
       const u = 0.06 + rand() * 0.94; // above horizon
       const phi = Math.acos(u);
-      const r = 1220 + rand() * 80;
+      const r = 2200 + rand() * 140;
 
       positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
       positions[i * 3 + 1] = r * Math.cos(phi);
@@ -306,7 +306,7 @@ export const SkyAndMoon: React.FC<SkyAndMoonProps> = ({
   const moonPosition = useMemo<[number, number, number]>(() => {
     const v = new THREE.Vector3(lightDirection[0], lightDirection[1], lightDirection[2])
       .normalize()
-      .multiplyScalar(1050);
+      .multiplyScalar(1950);
     return [v.x, v.y, v.z];
   }, [lightDirection]);
 
@@ -341,7 +341,7 @@ export const SkyAndMoon: React.FC<SkyAndMoonProps> = ({
     <group>
       {/* Seamless Atmospheric Gradient Sky Dome */}
       <mesh material={skyShaderMat} renderOrder={-10} frustumCulled={false}>
-        <sphereGeometry args={[1450, 32, 20]} />
+        <sphereGeometry args={[2650, 32, 20]} />
       </mesh>
 
       {/* Crisp Night Starfield */}

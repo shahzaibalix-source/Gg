@@ -1,12 +1,10 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
 import { TimeOfDay } from '../types';
+import { globalWindUniform } from '../materials/realisticNature';
 
-/**
- * Shared wind-sway uniform updated once per frame in WindTimeUpdater.
- */
-export const globalWindUniform = { value: 0 };
+export { globalWindUniform };
 
 export const WindTimeUpdater: React.FC = () => {
   useFrame((state) => {
@@ -384,17 +382,21 @@ export const EuropeanStreetLamp: React.FC<StreetLampProps> = ({
 };
 
 // -----------------------------------------------------------------------------
-// Shared Bench Resources
+// Shared HD Park Bench Resources (Curved Cast-Iron Frames + Slatted Timber)
 // -----------------------------------------------------------------------------
 const BENCH_GEOS = {
-  leg: new THREE.BoxGeometry(0.08, 0.44, 0.56),
-  seat: new THREE.BoxGeometry(1.76, 0.06, 0.5),
-  back: new THREE.BoxGeometry(1.76, 0.32, 0.05),
+  leg: new THREE.BoxGeometry(0.07, 0.44, 0.56),
+  arm: new THREE.BoxGeometry(0.06, 0.06, 0.54),
+  armPost: new THREE.BoxGeometry(0.05, 0.24, 0.05),
+  backBar: new THREE.BoxGeometry(0.06, 0.44, 0.05),
+  seatSlat: new THREE.BoxGeometry(1.82, 0.045, 0.13),
+  backSlat: new THREE.BoxGeometry(1.82, 0.09, 0.04),
 };
 
 const BENCH_MATERIALS = {
-  iron: new THREE.MeshStandardMaterial({ color: '#262a2e', roughness: 0.45, metalness: 0.75 }),
-  wood: new THREE.MeshStandardMaterial({ color: '#8f5d38', roughness: 0.76 }),
+  iron: new THREE.MeshStandardMaterial({ color: '#1f242a', roughness: 0.42, metalness: 0.78 }),
+  wood: new THREE.MeshStandardMaterial({ color: '#94613a', roughness: 0.72 }),
+  woodDark: new THREE.MeshStandardMaterial({ color: '#7a4d2b', roughness: 0.76 }),
 };
 
 interface ParkBenchProps {
@@ -404,22 +406,44 @@ interface ParkBenchProps {
 
 export const ParkBench: React.FC<ParkBenchProps> = ({ position, rotationY = 0 }) => (
   <group position={position} rotation={[0, rotationY, 0]}>
-    <mesh position={[-0.75, 0.22, 0]} geometry={BENCH_GEOS.leg} material={BENCH_MATERIALS.iron} castShadow />
-    <mesh position={[0.75, 0.22, 0]} geometry={BENCH_GEOS.leg} material={BENCH_MATERIALS.iron} castShadow />
-    <mesh
-      position={[0, 0.44, 0.04]}
-      geometry={BENCH_GEOS.seat}
-      material={BENCH_MATERIALS.wood}
-      castShadow
-      receiveShadow
-    />
-    <mesh
-      position={[0, 0.72, -0.22]}
-      rotation={[-0.2, 0, 0]}
-      geometry={BENCH_GEOS.back}
-      material={BENCH_MATERIALS.wood}
-      castShadow
-    />
+    {/* Cast-iron Side Frames, Armrests & Back Supports */}
+    {[-0.78, 0.78].map((bx) => (
+      <group key={bx} position={[bx, 0, 0]}>
+        <mesh position={[0, 0.22, 0]} geometry={BENCH_GEOS.leg} material={BENCH_MATERIALS.iron} castShadow />
+        <mesh position={[0, 0.54, 0.21]} geometry={BENCH_GEOS.armPost} material={BENCH_MATERIALS.iron} />
+        <mesh position={[0, 0.65, -0.02]} geometry={BENCH_GEOS.arm} material={BENCH_MATERIALS.iron} castShadow />
+        <mesh
+          position={[0, 0.64, -0.24]}
+          rotation={[-0.22, 0, 0]}
+          geometry={BENCH_GEOS.backBar}
+          material={BENCH_MATERIALS.iron}
+        />
+      </group>
+    ))}
+    {/* Center Iron Brace */}
+    <mesh position={[0, 0.22, 0]} geometry={BENCH_GEOS.leg} material={BENCH_MATERIALS.iron} />
+    {/* 3 Contoured Timber Seat Slats */}
+    {[-0.14, 0.02, 0.18].map((sz, i) => (
+      <mesh
+        key={`seat-${i}`}
+        position={[0, 0.45, sz]}
+        geometry={BENCH_GEOS.seatSlat}
+        material={i === 1 ? BENCH_MATERIALS.woodDark : BENCH_MATERIALS.wood}
+        castShadow
+        receiveShadow
+      />
+    ))}
+    {/* 3 Angled Timber Backrest Slats */}
+    {[0.58, 0.7, 0.82].map((by, i) => (
+      <mesh
+        key={`back-${i}`}
+        position={[0, by, -0.21 - i * 0.026]}
+        rotation={[-0.22, 0, 0]}
+        geometry={BENCH_GEOS.backSlat}
+        material={i % 2 === 0 ? BENCH_MATERIALS.wood : BENCH_MATERIALS.woodDark}
+        castShadow
+      />
+    ))}
   </group>
 );
 
@@ -437,44 +461,62 @@ const SIGN_MATERIALS = {
   board: new THREE.MeshStandardMaterial({ color: '#423124', roughness: 0.78 }),
 };
 
+const SIGN_TEX_CACHE = new Map<string, THREE.CanvasTexture>();
+const MAX_SIGN_TEX_CACHE = 120;
+
 interface PlotNameplateSignProps {
   position: [number, number, number];
   rotationY?: number;
   plotCode: string;
   ownerUsername: string | null;
+  tier?: 'vip-1' | 'og-50' | 'resident';
 }
 
 /**
  * Personalized community wooden & brass plot nameplate sign.
- * Renders crisp resident name or "Claim Residence" directly on a procedural CanvasTexture.
+ * Uses a bounded CanvasTexture cache to prevent main-thread texture allocation stutters during panning.
  */
 export const PlotNameplateSign: React.FC<PlotNameplateSignProps> = ({
   position,
   rotationY = 0,
   plotCode,
   ownerUsername,
+  tier = 'resident',
 }) => {
   const signTexture = useMemo(() => {
+    const cacheKey = `${plotCode}|${ownerUsername ?? ''}|${tier}`;
+    const cached = SIGN_TEX_CACHE.get(cacheKey);
+    if (cached) {
+      // Refresh LRU position
+      SIGN_TEX_CACHE.delete(cacheKey);
+      SIGN_TEX_CACHE.set(cacheKey, cached);
+      return cached;
+    }
+
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 224;
     const ctx = canvas.getContext('2d')!;
 
     if (ownerUsername) {
-      ctx.fillStyle = '#2b333d';
+      const isOg = tier === 'og-50';
+      const isVip = tier === 'vip-1';
+      ctx.fillStyle = isVip ? '#1c1506' : isOg ? '#1f232e' : '#2b333d';
       ctx.fillRect(0, 0, 512, 224);
-      ctx.strokeStyle = '#c8a96e';
-      ctx.lineWidth = 10;
+      ctx.strokeStyle = isVip ? '#facc15' : isOg ? '#eab308' : '#c8a96e';
+      ctx.lineWidth = isVip ? 14 : 10;
       ctx.strokeRect(12, 12, 488, 200);
 
-      ctx.fillStyle = '#c8a96e';
-      ctx.font = '600 28px sans-serif';
+      ctx.fillStyle = isVip ? '#fde047' : isOg ? '#fbbf24' : '#c8a96e';
+      ctx.font = '700 26px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(plotCode, 256, 72);
+      const badge = isVip ? `${plotCode} · VIP #1` : isOg ? `${plotCode} · OG MEMBER` : plotCode;
+      ctx.fillText(badge, 256, 70, 464);
 
       ctx.fillStyle = '#f8f5ef';
-      ctx.font = '700 42px sans-serif';
-      ctx.fillText(ownerUsername, 256, 146);
+      const fontSize = ownerUsername.length > 20 ? 30 : ownerUsername.length > 14 ? 35 : 42;
+      ctx.font = `700 ${fontSize}px sans-serif`;
+      ctx.fillText(ownerUsername, 256, 146, 464);
     } else {
       ctx.fillStyle = '#eef3ed';
       ctx.fillRect(0, 0, 512, 224);
@@ -485,25 +527,30 @@ export const PlotNameplateSign: React.FC<PlotNameplateSignProps> = ({
       ctx.fillStyle = '#3f6a4b';
       ctx.font = '700 32px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(`PLOT ${plotCode} · OPEN`, 256, 86);
+      ctx.fillText(`PLOT ${plotCode} · OPEN`, 256, 86, 464);
 
       ctx.fillStyle = '#1f2933';
       ctx.font = '600 34px sans-serif';
-      ctx.fillText('Claim Residence', 256, 148);
+      ctx.fillText('Claim Residence', 256, 148, 464);
     }
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
     tex.needsUpdate = true;
-    return tex;
-  }, [plotCode, ownerUsername]);
 
-  useEffect(() => {
-    return () => {
-      signTexture.dispose();
-    };
-  }, [signTexture]);
+    SIGN_TEX_CACHE.set(cacheKey, tex);
+    if (SIGN_TEX_CACHE.size > MAX_SIGN_TEX_CACHE) {
+      const oldestKey = SIGN_TEX_CACHE.keys().next().value;
+      if (oldestKey) {
+        const oldTex = SIGN_TEX_CACHE.get(oldestKey);
+        SIGN_TEX_CACHE.delete(oldestKey);
+        oldTex?.dispose();
+      }
+    }
+
+    return tex;
+  }, [plotCode, ownerUsername, tier]);
 
   return (
     <group position={position} rotation={[0, rotationY, 0]}>

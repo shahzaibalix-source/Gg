@@ -1,12 +1,12 @@
 {
-  "projectId": "academic-leaf-nbvhw",
-  "appId": "1:913928742365:web:76d2542f57f70e3ec1c234",
-  "apiKey": "AIzaSyAwXZjoxAtcepI7J6r9pv7QL-lOQwMR98M",
-  "authDomain": "academic-leaf-nbvhw.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-lindenhofcommuni-3f3ccff8-b6b6-41a6-99db-bfabaaf9216b",
-  "storageBucket": "academic-leaf-nbvhw.firebasestorage.app",
-  "messagingSenderId": "913928742365",
+  "projectId": "gen-lang-client-0471315132",
+  "appId": "1:550571853770:web:d0b8717a89e3e37f563133",
+  "apiKey": "AIzaSyAg6ng8kA5rQjAMaA3abpJNjATcDH6Yk0A",
+  "authDomain": "gen-lang-client-0471315132.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-gg-02ffc638-da4a-4338-bd34-5e5349e1bd32",
+  "storageBucket": "gen-lang-client-0471315132.firebasestorage.app",
+  "messagingSenderId": "550571853770",
   "measurementId": "",
-  "oAuthClientId": "913928742365-o2ltm3bob652p37sq1jekv0e9dc27aen.apps.googleusercontent.com",
+  "oAuthClientId": "550571853770-i84pjgl5agu995nt15oqhg7s8aeia3mc.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

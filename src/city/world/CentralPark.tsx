@@ -1,8 +1,12 @@
-import React, { useRef } from 'react';
+import React, { useMemo } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
 import { CityTextureSet } from '../materials/proceduralTextures';
 import { ParkBench, ParkFountain, StylizedTree } from '../assets/FoliageAndProps';
+import {
+  AnimatedWaterPlane,
+  InstancedGrassField,
+  generateParkGrassTufts,
+} from '../assets/NaturePropsAndWater';
 import { SIDEWALK_HEIGHT, TOWN_BENCHES } from './MasterTownBlueprint';
 
 interface CentralParkProps {
@@ -21,14 +25,6 @@ export const CentralPark: React.FC<CentralParkProps> = ({
   activeBenchId,
   onSelectBench,
 }) => {
-  const lakeWaterRef = useRef<THREE.MeshStandardMaterial>(null);
-
-  useFrame((state) => {
-    if (lakeWaterRef.current) {
-      lakeWaterRef.current.roughness = 0.14 + Math.sin(state.clock.elapsedTime * 1.4) * 0.04;
-    }
-  });
-
   const parkTrees: Array<{
     x: number;
     z: number;
@@ -52,6 +48,30 @@ export const CentralPark: React.FC<CentralParkProps> = ({
     { x: -14.8, z: 3.5, variant: 'cypress' },
     { x: 14.8, z: 3.5, variant: 'cypress' },
   ];
+
+  const coreParkGrass = useMemo(
+    () =>
+      generateParkGrassTufts({
+        cx: 52.3,
+        cz: 0,
+        y: SIDEWALK_HEIGHT,
+        width: 34.4,
+        depth: 33.4,
+        count: 680,
+        seed: 4120,
+        excludeFn: (x, z) => {
+          // Keep walkways, fountain plaza, lake, tennis court, and playground clear
+          if (Math.abs(x - 48.6) < 1.55) return true;
+          if (Math.abs(z + 1.0) < 1.55) return true;
+          if (Math.hypot(x - 42.2, z + 1.0) < 5.1) return true;
+          if (x >= 49.4 && x <= 66.6 && z >= -14.4 && z <= -2.6) return true;
+          if (x >= 35.8 && x <= 46.6 && z >= -15.2 && z <= -7.8) return true;
+          if (x >= 36.6 && x <= 47.8 && z >= 5.5 && z <= 15.6) return true;
+          return false;
+        },
+      }),
+    [],
+  );
 
   return (
     <group>
@@ -91,23 +111,23 @@ export const CentralPark: React.FC<CentralParkProps> = ({
         {/* Park Lawn Base Pad */}
         <mesh position={[52.375, SIDEWALK_HEIGHT / 2, 0]} receiveShadow>
           <boxGeometry args={[36.65, SIDEWALK_HEIGHT, 35.9]} />
-          <meshStandardMaterial map={textures.grass} color="#76a35e" roughness={0.92} />
+          <meshStandardMaterial map={textures.grass} color="#76a35e" roughness={0.92} polygonOffset polygonOffsetFactor={1} />
         </mesh>
 
-        {/* Decomposed Granite Walking Paths */}
-        <group position={[0, SIDEWALK_HEIGHT + 0.012, 0]}>
+        {/* Decomposed Granite Walking Paths (staggered Y to prevent crossing overlap flicker) */}
+        <group position={[0, SIDEWALK_HEIGHT + 0.015, 0]}>
           <mesh position={[48.6, 0, 0]} receiveShadow>
             <boxGeometry args={[2.3, 0.024, 35.5]} />
             <meshStandardMaterial map={textures.parkGravel} color="#ddd2bc" roughness={0.9} />
           </mesh>
-          <mesh position={[52.3, 0, -1.0]} receiveShadow>
+          <mesh position={[52.3, 0.005, -1.0]} receiveShadow>
             <boxGeometry args={[36.2, 0.024, 2.3]} />
-            <meshStandardMaterial map={textures.parkGravel} color="#ddd2bc" roughness={0.9} />
+            <meshStandardMaterial map={textures.parkGravel} color="#ddd2bc" roughness={0.9} polygonOffset polygonOffsetFactor={-1} />
           </mesh>
           {/* Fountain Circular Stone Plaza */}
-          <mesh position={[42.2, 0.005, -1.0]} receiveShadow>
+          <mesh position={[42.2, 0.01, -1.0]} receiveShadow>
             <cylinderGeometry args={[4.6, 4.6, 0.028, 28]} />
-            <meshStandardMaterial map={textures.cobblestone} color="#cec5b5" roughness={0.85} />
+            <meshStandardMaterial map={textures.cobblestone} color="#cec5b5" roughness={0.85} polygonOffset polygonOffsetFactor={-2} />
           </mesh>
         </group>
 
@@ -123,18 +143,19 @@ export const CentralPark: React.FC<CentralParkProps> = ({
             <boxGeometry args={[15.8, 0.08, 10.6]} />
             <meshStandardMaterial map={textures.cobblestone} color="#b9b2a4" roughness={0.88} />
           </mesh>
-          {/* Water Surface */}
-          <mesh position={[0, 0.09, 0]}>
-            <boxGeometry args={[14.6, 0.04, 9.4]} />
-            <meshPhysicalMaterial
-              ref={lakeWaterRef}
-              color="#327b94"
-              roughness={0.1}
-              metalness={0.18}
-              clearcoat={0.92}
-              envMapIntensity={1.4}
-            />
-          </mesh>
+          {/* Animated 3D Water Surface */}
+          <AnimatedWaterPlane
+            position={[0, 0.11, 0]}
+            width={14.6}
+            depth={9.4}
+            segmentsX={14}
+            segmentsZ={10}
+            baseColor="#26738e"
+            crestColor="#92ddf0"
+            waveAmp={0.022}
+            rippleScale={1.45}
+            tag="core-park-lake"
+          />
           {/* Wooden Pier & Arched Footbridge */}
           <mesh position={[0, 0.42, 0]} castShadow receiveShadow>
             <boxGeometry args={[2.1, 0.16, 10.2]} />
@@ -246,6 +267,9 @@ export const CentralPark: React.FC<CentralParkProps> = ({
             </mesh>
           </group>
         </group>
+
+        {/* 3D Animated Park Grass Tufts */}
+        <InstancedGrassField tufts={coreParkGrass} />
 
         {/* Park Trees */}
         {parkTrees.map((t, i) => (

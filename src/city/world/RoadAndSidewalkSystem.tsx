@@ -12,7 +12,7 @@ import {
   SIDEWALK_PADS,
   STREET_LAMPS,
 } from './MasterTownBlueprint';
-import { EuropeanStreetLamp, StylizedTree } from '../assets/FoliageAndProps';
+import { StylizedTree } from '../assets/FoliageAndProps';
 import { CarMesh } from '../assets/VehicleModels';
 import { sharedTrafficSignals, updateSharedTrafficSignals } from '../simulation/trafficSignals';
 import { TimeOfDay } from '../types';
@@ -283,6 +283,7 @@ export const RoadAndSidewalkSystem: React.FC<RoadAndSidewalkSystemProps> = ({
     for (const zBase of [-108, -124, 108, 124]) {
       for (let x = -132; x <= 132; x += 16) {
         if (isNearRoad(x)) continue;
+        if (zBase < -90 && Math.abs(x) < 52) continue;
         const v = nextRand();
         trees.push({
           x: x + (nextRand() - 0.5) * 4,
@@ -311,12 +312,97 @@ export const RoadAndSidewalkSystem: React.FC<RoadAndSidewalkSystemProps> = ({
     return trees;
   }, []);
 
+  const lampPoleMeshRef = useRef<THREE.InstancedMesh>(null);
+  const lampCapMeshRef = useRef<THREE.InstancedMesh>(null);
+  const lampGlobeMeshRef = useRef<THREE.InstancedMesh>(null);
+  const lampLightPoolRef = useRef<THREE.InstancedMesh>(null);
+  const treeTrunkMeshRef = useRef<THREE.InstancedMesh>(null);
+  const treeCanopyMeshRef = useRef<THREE.InstancedMesh>(null);
+
+  const isEvening = timeOfDay === 'sunset' || timeOfDay === 'night';
+
+  useEffect(() => {
+    if (lampPoleMeshRef.current && lampCapMeshRef.current && lampGlobeMeshRef.current) {
+      STREET_LAMPS.forEach((lamp, i) => {
+        _dummy.position.set(lamp.x, SIDEWALK_HEIGHT + 1.9, lamp.z);
+        _dummy.rotation.set(0, lamp.rotationY, 0);
+        _dummy.scale.set(1, 1, 1);
+        _dummy.updateMatrix();
+        lampPoleMeshRef.current!.setMatrixAt(i, _dummy.matrix);
+
+        _dummy.position.set(lamp.x, SIDEWALK_HEIGHT + 4.05, lamp.z);
+        _dummy.updateMatrix();
+        lampCapMeshRef.current!.setMatrixAt(i, _dummy.matrix);
+
+        _dummy.position.set(lamp.x, SIDEWALK_HEIGHT + 3.85, lamp.z);
+        _dummy.updateMatrix();
+        lampGlobeMeshRef.current!.setMatrixAt(i, _dummy.matrix);
+      });
+      lampPoleMeshRef.current.instanceMatrix.needsUpdate = true;
+      lampCapMeshRef.current.instanceMatrix.needsUpdate = true;
+      lampGlobeMeshRef.current.instanceMatrix.needsUpdate = true;
+      lampPoleMeshRef.current.computeBoundingSphere();
+      lampCapMeshRef.current.computeBoundingSphere();
+      lampGlobeMeshRef.current.computeBoundingSphere();
+    }
+
+    if (lampLightPoolRef.current) {
+      STREET_LAMPS.forEach((lamp, i) => {
+        _dummy.position.set(lamp.x, SIDEWALK_HEIGHT + 0.025, lamp.z);
+        _dummy.rotation.set(-Math.PI / 2, 0, 0);
+        _dummy.scale.set(1, 1, 1);
+        _dummy.updateMatrix();
+        lampLightPoolRef.current!.setMatrixAt(i, _dummy.matrix);
+      });
+      lampLightPoolRef.current.instanceMatrix.needsUpdate = true;
+      lampLightPoolRef.current.computeBoundingSphere();
+    }
+  }, [isEvening]);
+
+  useEffect(() => {
+    if (treeTrunkMeshRef.current && treeCanopyMeshRef.current) {
+      const color = new THREE.Color();
+      perimeterTrees.forEach((tree, i) => {
+        const s = tree.scale;
+        _dummy.position.set(tree.x, 1.0 * s, tree.z);
+        _dummy.rotation.set(0, tree.rot, 0);
+        _dummy.scale.set(s, s, s);
+        _dummy.updateMatrix();
+        treeTrunkMeshRef.current!.setMatrixAt(i, _dummy.matrix);
+
+        const canopyScaleY = tree.variant === 'cypress' ? s * 1.55 : s * 1.05;
+        const canopyScaleXZ = tree.variant === 'cypress' ? s * 0.65 : s;
+        _dummy.position.set(tree.x, 2.75 * s, tree.z);
+        _dummy.rotation.set(0, tree.rot, 0);
+        _dummy.scale.set(canopyScaleXZ, canopyScaleY, canopyScaleXZ);
+        _dummy.updateMatrix();
+        treeCanopyMeshRef.current!.setMatrixAt(i, _dummy.matrix);
+
+        color.set(
+          tree.variant === 'cypress'
+            ? '#3c683a'
+            : tree.variant === 'ornamental'
+              ? '#6ea05a'
+              : '#4f8545',
+        );
+        treeCanopyMeshRef.current!.setColorAt(i, color);
+      });
+      treeTrunkMeshRef.current.instanceMatrix.needsUpdate = true;
+      treeCanopyMeshRef.current.instanceMatrix.needsUpdate = true;
+      if (treeCanopyMeshRef.current.instanceColor) {
+        treeCanopyMeshRef.current.instanceColor.needsUpdate = true;
+      }
+      treeTrunkMeshRef.current.computeBoundingSphere();
+      treeCanopyMeshRef.current.computeBoundingSphere();
+    }
+  }, [perimeterTrees]);
+
   return (
     <group>
       {/* Town Meadow Ground + Vast Rolling Open Countryside */}
       <VastCountryside textures={textures} />
 
-      {/* Road Segments with Double Center Lines & Edge Markings */}
+      {/* Road Segments with Double Center Lines & Edge Markings (NS/EW Y-staggered to avoid Z-fighting) */}
       {ROAD_SEGMENTS.map((seg) => {
         const dx = seg.end.x - seg.start.x;
         const dz = seg.end.z - seg.start.z;
@@ -324,34 +410,38 @@ export const RoadAndSidewalkSystem: React.FC<RoadAndSidewalkSystemProps> = ({
         const cx = (seg.start.x + seg.end.x) / 2;
         const cz = (seg.start.z + seg.end.z) / 2;
         const angle = Math.atan2(dx, dz);
+        const isEW = Math.abs(dx) >= Math.abs(dz);
+        const roadYOffset = isEW ? -0.003 : 0;
 
         return (
           <group key={seg.id} position={[cx, 0, cz]} rotation={[0, angle, 0]}>
-            <mesh position={[0, ROAD_SURFACE_Y / 2, 0]} receiveShadow>
+            <mesh position={[0, ROAD_SURFACE_Y / 2 + roadYOffset, 0]} receiveShadow>
               <boxGeometry args={[seg.width, ROAD_SURFACE_Y, length]} />
               <meshStandardMaterial
                 map={textures.asphalt}
                 color={seg.isStubExtension ? '#414750' : '#363b43'}
                 roughness={0.84}
                 metalness={0.04}
+                polygonOffset
+                polygonOffsetFactor={isEW ? 1 : 0}
               />
             </mesh>
 
             {/* Outer Edge Road Lines */}
-            <mesh position={[-seg.width / 2 + 0.25, ROAD_SURFACE_Y + 0.006, 0]} material={roadEdgeMat}>
+            <mesh position={[-seg.width / 2 + 0.25, ROAD_SURFACE_Y + 0.008, 0]} material={roadEdgeMat}>
               <boxGeometry args={[0.1, 0.005, length - 0.3]} />
             </mesh>
-            <mesh position={[seg.width / 2 - 0.25, ROAD_SURFACE_Y + 0.006, 0]} material={roadEdgeMat}>
+            <mesh position={[seg.width / 2 - 0.25, ROAD_SURFACE_Y + 0.008, 0]} material={roadEdgeMat}>
               <boxGeometry args={[0.1, 0.005, length - 0.3]} />
             </mesh>
 
             {/* Double Center Lines on Main Boulevards */}
             {seg.hasDoubleCenterLine && (
               <>
-                <mesh position={[-0.14, ROAD_SURFACE_Y + 0.007, 0]} material={yellowLineMat}>
+                <mesh position={[-0.14, ROAD_SURFACE_Y + 0.009, 0]} material={yellowLineMat}>
                   <boxGeometry args={[0.11, 0.005, length - 0.6]} />
                 </mesh>
-                <mesh position={[0.14, ROAD_SURFACE_Y + 0.007, 0]} material={yellowLineMat}>
+                <mesh position={[0.14, ROAD_SURFACE_Y + 0.009, 0]} material={yellowLineMat}>
                   <boxGeometry args={[0.11, 0.005, length - 0.6]} />
                 </mesh>
               </>
@@ -384,7 +474,7 @@ export const RoadAndSidewalkSystem: React.FC<RoadAndSidewalkSystemProps> = ({
         const halfD = inter.depth / 2;
         return (
           <group key={inter.id} position={[inter.center.x, 0, inter.center.z]}>
-            <mesh position={[0, ROAD_SURFACE_Y / 2 + 0.001, 0]} receiveShadow>
+            <mesh position={[0, ROAD_SURFACE_Y / 2 + 0.003, 0]} receiveShadow>
               <boxGeometry args={[inter.width, ROAD_SURFACE_Y, inter.depth]} />
               <meshStandardMaterial
                 map={textures.asphalt}
@@ -428,7 +518,7 @@ export const RoadAndSidewalkSystem: React.FC<RoadAndSidewalkSystemProps> = ({
       {ROUNDABOUT_CENTERS.map((rb) => (
         <group key={rb.id} position={[rb.x, 0, rb.z]}>
           {/* Outer Circular Asphalt Apron sits cleanly above passing road markings */}
-          <mesh position={[0, ROAD_SURFACE_Y + 0.012, 0]} receiveShadow>
+          <mesh position={[0, ROAD_SURFACE_Y + 0.015, 0]} receiveShadow>
             <cylinderGeometry args={[7.4, 7.4, 0.022, 32]} />
             <meshStandardMaterial
               map={textures.asphalt}
@@ -475,15 +565,36 @@ export const RoadAndSidewalkSystem: React.FC<RoadAndSidewalkSystemProps> = ({
         </mesh>
       ))}
 
-      {/* European Streetlamps */}
-      {STREET_LAMPS.map((lamp) => (
-        <EuropeanStreetLamp
-          key={lamp.id}
-          position={[lamp.x, SIDEWALK_HEIGHT, lamp.z]}
-          rotationY={lamp.rotationY}
-          timeOfDay={timeOfDay}
+      {/* Instanced Core European Streetlamps (40 lamps -> 3 draw calls) */}
+      <instancedMesh ref={lampPoleMeshRef} args={[undefined, undefined, STREET_LAMPS.length]} castShadow>
+        <cylinderGeometry args={[0.06, 0.095, 3.8, 7]} />
+        <meshStandardMaterial color="#252930" roughness={0.45} metalness={0.68} />
+      </instancedMesh>
+      <instancedMesh ref={lampCapMeshRef} args={[undefined, undefined, STREET_LAMPS.length]}>
+        <coneGeometry args={[0.26, 0.22, 6]} />
+        <meshStandardMaterial color="#1f2329" roughness={0.48} metalness={0.6} />
+      </instancedMesh>
+      <instancedMesh ref={lampGlobeMeshRef} args={[undefined, undefined, STREET_LAMPS.length]}>
+        <sphereGeometry args={[0.2, 8, 8]} />
+        <meshStandardMaterial
+          color={isEvening ? '#ffeab5' : '#ece7dc'}
+          emissive={isEvening ? '#ffaa33' : '#000000'}
+          emissiveIntensity={isEvening ? 2.4 : 0}
+          roughness={0.25}
         />
-      ))}
+      </instancedMesh>
+      {isEvening && (
+        <instancedMesh ref={lampLightPoolRef} args={[undefined, undefined, STREET_LAMPS.length]}>
+          <circleGeometry args={[3.4, 14]} />
+          <meshBasicMaterial
+            color="#ffcf78"
+            transparent
+            opacity={0.14}
+            depthWrite={false}
+            blending={THREE.AdditiveBlending}
+          />
+        </instancedMesh>
+      )}
 
       {/* Dedicated Parked Cars in Commercial, Civic & Stadium Parking Bays */}
       {PARKED_CARS.map((car) => (
@@ -492,17 +603,15 @@ export const RoadAndSidewalkSystem: React.FC<RoadAndSidewalkSystemProps> = ({
         </group>
       ))}
 
-      {/* Perimeter Countryside Tree Groves (no shadow casting outside town shadow bounds) */}
-      {perimeterTrees.map((tree, i) => (
-        <StylizedTree
-          key={`ptree-${i}`}
-          position={[tree.x, 0, tree.z]}
-          scale={tree.scale}
-          variant={tree.variant}
-          rotationY={tree.rot}
-          castShadow={false}
-        />
-      ))}
+      {/* Instanced Perimeter Countryside Tree Groves (no shadow casting outside town shadow bounds) */}
+      <instancedMesh ref={treeTrunkMeshRef} args={[undefined, undefined, perimeterTrees.length]}>
+        <cylinderGeometry args={[0.18, 0.28, 2.0, 6]} />
+        <meshStandardMaterial color="#674931" roughness={0.92} />
+      </instancedMesh>
+      <instancedMesh ref={treeCanopyMeshRef} args={[undefined, undefined, perimeterTrees.length]} receiveShadow>
+        <dodecahedronGeometry args={[1.45, 0]} />
+        <meshStandardMaterial color="#ffffff" roughness={0.88} />
+      </instancedMesh>
     </group>
   );
 };

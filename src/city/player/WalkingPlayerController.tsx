@@ -17,6 +17,7 @@ import {
 } from '../simulation/WorldCollision';
 import { resolveActiveWorldInteraction } from '../interaction/WorldInteractions';
 import { CameraFocusTarget } from '../camera/CityCameraController';
+import { ExpansionCityWorld } from '../expansion/ExpansionMasterPlan';
 
 export interface PlayerPoseState {
   x: number;
@@ -28,6 +29,7 @@ export interface PlayerPoseState {
 interface WalkingPlayerControllerProps {
   cameraMode: CameraMode;
   plots: TownPlot[];
+  expansionWorld?: ExpansionCityWorld | null;
   playerProfile: PlayerProfile;
   sittingBenchId: string | null;
   openDoors: Record<string, boolean>;
@@ -63,6 +65,7 @@ function interactionSignature(item: NearbyInteractable | null): string {
 export const WalkingPlayerController: React.FC<WalkingPlayerControllerProps> = ({
   cameraMode,
   plots,
+  expansionWorld,
   playerProfile,
   sittingBenchId,
   openDoors,
@@ -228,15 +231,17 @@ export const WalkingPlayerController: React.FC<WalkingPlayerControllerProps> = (
           stepZ,
           plots,
           vehicleStatesRef.current,
+          0.36,
+          expansionWorld,
         );
         playerPoseRef.current.x = resolved.x;
         playerPoseRef.current.z = resolved.z;
-        playerPoseRef.current.y = getSurfaceElevationAt(resolved.x, resolved.z);
+        playerPoseRef.current.y = getSurfaceElevationAt(resolved.x, resolved.z, expansionWorld);
         playerPoseRef.current.yaw = bench.rotationY;
         camYawRef.current = bench.rotationY;
       }
     }
-  }, [sittingBenchId, plots, playerPoseRef, vehicleStatesRef]);
+  }, [sittingBenchId, plots, expansionWorld, playerPoseRef, vehicleStatesRef]);
 
   useFrame((state, delta) => {
     const dt = Math.min(delta, 0.05);
@@ -258,10 +263,12 @@ export const WalkingPlayerController: React.FC<WalkingPlayerControllerProps> = (
         target.z,
         plots,
         vehicleStatesRef.current,
+        0.36,
+        expansionWorld,
       );
       pose.x = safe.x;
       pose.z = safe.z;
-      pose.y = getSurfaceElevationAt(safe.x, safe.z);
+      pose.y = getSurfaceElevationAt(safe.x, safe.z, expansionWorld);
       _camCurrentLook.set(pose.x, pose.y + 1.38, pose.z);
     }
 
@@ -361,6 +368,8 @@ export const WalkingPlayerController: React.FC<WalkingPlayerControllerProps> = (
           pose.z + wishZ * step,
           plots,
           vehicleStatesRef.current,
+          0.36,
+          expansionWorld,
         );
         pose.x = resolved.x;
         pose.z = resolved.z;
@@ -375,12 +384,14 @@ export const WalkingPlayerController: React.FC<WalkingPlayerControllerProps> = (
           pose.z,
           plots,
           vehicleStatesRef.current,
+          0.36,
+          expansionWorld,
         );
         pose.x = resolved.x;
         pose.z = resolved.z;
       }
 
-      const groundY = getSurfaceElevationAt(pose.x, pose.z);
+      const groundY = getSurfaceElevationAt(pose.x, pose.z, expansionWorld);
       pose.y = THREE.MathUtils.damp(pose.y, groundY, 15, dt);
 
       // Third-person smooth follow camera behind character
@@ -393,7 +404,7 @@ export const WalkingPlayerController: React.FC<WalkingPlayerControllerProps> = (
       const camFwdZ = Math.cos(camYawRef.current);
       const desiredCamX = pose.x - camFwdX * horiz;
       const desiredCamZ = pose.z - camFwdZ * horiz;
-      const groundUnderCam = getSurfaceElevationAt(desiredCamX, desiredCamZ);
+      const groundUnderCam = getSurfaceElevationAt(desiredCamX, desiredCamZ, expansionWorld);
       const desiredCamY = Math.max(groundUnderCam + 0.6, pose.y + vert);
 
       _camDesiredPos.set(desiredCamX, desiredCamY, desiredCamZ);
@@ -422,6 +433,7 @@ export const WalkingPlayerController: React.FC<WalkingPlayerControllerProps> = (
         plots,
         openDoors,
         dynamicVehicles: vehicleStatesRef.current,
+        expansionWorld,
       });
       const sig = interactionSignature(active);
       if (sig !== lastSigRef.current) {

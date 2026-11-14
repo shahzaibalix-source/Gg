@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
@@ -31,14 +31,19 @@ import {
 import { NightStreetLights } from './world/NightStreetLights';
 import { SkyAndMoon } from './world/SkyAndMoon';
 import { SpatialBirdAudioController } from './audio/SpatialBirdAudioController';
+import { ExpansionCityWorld } from './expansion/ExpansionMasterPlan';
+import { ExpansionPlotSpec } from './expansion/types';
+import { ExpandedCityRenderer } from './expansion/ExpandedCityRenderer';
 
 interface CitySceneProps {
   plots: TownPlot[];
+  expansionWorld?: ExpansionCityWorld | null;
   cameraMode: CameraMode;
   cinematicTour: CinematicTourId;
   timeOfDay: TimeOfDay;
   weather: WeatherMode;
   selectedPlotId: string | null;
+  selectedExpansionPlotId?: string | null;
   constructionDraft: ConstructionDraft;
   playerProfile: PlayerProfile;
   sittingBenchId: string | null;
@@ -49,6 +54,8 @@ interface CitySceneProps {
   focusTargetRef: React.MutableRefObject<CameraFocusTarget | null>;
   birdAudioEnabled: boolean;
   onSelectPlot: (plot: TownPlot | null) => void;
+  onSelectExpansionPlot?: (plot: ExpansionPlotSpec | null) => void;
+  onOpenMonumentModal?: () => void;
   onSelectBench?: (benchId: string) => void;
   onActiveInteractionChange: (item: NearbyInteractable | null) => void;
   onTriggerPrimaryAction: () => void;
@@ -115,13 +122,20 @@ const LIGHTING_PRESETS: Record<
   },
 };
 
+const _focusCamDir = new THREE.Vector3();
+
 const SceneEnvironmentSetup: React.FC<{
   timeOfDay: TimeOfDay;
   weather: WeatherMode;
   isSoftwareGl: boolean;
-}> = ({ timeOfDay, weather, isSoftwareGl }) => {
+  isMobileGpu: boolean;
+}> = ({ timeOfDay, weather, isSoftwareGl, isMobileGpu }) => {
   const { gl, scene } = useThree();
   const base = LIGHTING_PRESETS[timeOfDay];
+  const keyLightRef = useRef<THREE.DirectionalLight>(null);
+  const shadowTarget = useMemo(() => new THREE.Object3D(), []);
+  const lastCamNearRef = useRef(0.35);
+  const lastAltRef = useRef(-1);
 
   const isMutedWeather = weather === 'cloudy' || weather === 'rainy' || weather === 'foggy';
   const skyColor =
@@ -146,7 +160,6 @@ const SceneEnvironmentSetup: React.FC<{
         : base.fogColor
       : skyColor;
 
-  // Automated night fog: rich nocturnal horizon mist at night even when weather === 'sunny'
   const baseFogNear =
     weather === 'foggy'
       ? timeOfDay === 'night'
@@ -184,6 +197,7 @@ const SceneEnvironmentSetup: React.FC<{
         : 1.0;
 
   useEffect(() => {
+    scene.add(shadowTarget);
     const pmrem = new THREE.PMREMGenerator(gl);
     const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
     scene.environment = envRT.texture;
@@ -191,10 +205,11 @@ const SceneEnvironmentSetup: React.FC<{
     pmrem.dispose();
 
     return () => {
+      scene.remove(shadowTarget);
       scene.environment = null;
       envRT.dispose();
     };
-  }, [gl, scene]);
+  }, [gl, scene, shadowTarget]);
 
   useEffect(() => {
     scene.background = new THREE.Color(skyColor);
@@ -213,15 +228,55 @@ const SceneEnvironmentSetup: React.FC<{
     timeOfDay,
   ]);
 
-  // Dynamically lift fog horizon when viewing from high Free / Aerial altitudes
-  // so the full built city stays bright and clear while distant vast land still fades smoothly.
   useFrame(({ camera }) => {
-    const fog = scene.fog;
-    if (!(fog instanceof THREE.Fog)) return;
-    const altitudeBoost = Math.max(0, camera.position.y - 40) * 2.25;
-    fog.near = baseFogNear + altitudeBoost * 0.65;
-    fog.far = baseFogFar + altitudeBoost * 2.35;
+    // 1. Adaptive near-plane scaling cuts far/near depth ratio from ~17,000:1 to ~350:1 at altitude,
+    // eliminating perspective Z-fighting across elevated views without mobile early-Z penalty.
+    if (camera instanceof THREE.PerspectiveCamera) {
+      const targetNear = THREE.MathUtils.clamp(camera.position.y * 0.032, 0.35, 14);
+      if (Math.abs(targetNear - lastCamNearRef.current) > lastCamNearRef.current * 0.14) {
+        lastCamNearRef.current = targetNear;
+        camera.near = targetNear;
+        camera.far = 4200;
+        camera.updateProjectionMatrix();
+      }
+    }
+
+    // 2. Throttle fog horizon lift when altitude changes materially
+    const camY = camera.position.y;
+    if (Math.abs(camY - lastAltRef.current) > 1.5) {
+      lastAltRef.current = camY;
+      const fog = scene.fog;
+      if (fog instanceof THREE.Fog) {
+        const altitudeBoost = Math.max(0, camY - 40) * 2.25;
+        fog.near = baseFogNear + altitudeBoost * 0.65;
+        fog.far = baseFogFar + altitudeBoost * 2.35;
+      }
+    }
+
+    // 3. Track viewport focus with snapped directional shadow frustum so shadows stay crisp across neighborhoods
+    const light = keyLightRef.current;
+    if (light && !isSoftwareGl) {
+      camera.getWorldDirection(_focusCamDir);
+      const lookScale =
+        Math.abs(_focusCamDir.y) > 0.12
+          ? THREE.MathUtils.clamp(camY / -_focusCamDir.y, 4, 140)
+          : 40;
+      const snap = 16;
+      const fx = Math.round((camera.position.x + _focusCamDir.x * lookScale) / snap) * snap;
+      const fz = Math.round((camera.position.z + _focusCamDir.z * lookScale) / snap) * snap;
+      if (
+        Math.abs(shadowTarget.position.x - fx) >= snap ||
+        Math.abs(shadowTarget.position.z - fz) >= snap
+      ) {
+        shadowTarget.position.set(fx, 0, fz);
+        shadowTarget.updateMatrixWorld();
+        light.position.set(fx + base.sunPos[0], base.sunPos[1], fz + base.sunPos[2]);
+        light.target = shadowTarget;
+      }
+    }
   });
+
+  const shadowMapSize = isMobileGpu ? 1024 : 2048;
 
   return (
     <>
@@ -233,20 +288,21 @@ const SceneEnvironmentSetup: React.FC<{
       />
       <hemisphereLight args={[base.hemiSky, base.hemiGround, base.hemiIntensity]} />
       <directionalLight
+        ref={keyLightRef}
         position={base.sunPos}
         color={base.sunColor}
         intensity={base.sunIntensity * sunMult}
         castShadow={!isSoftwareGl}
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
+        shadow-mapSize-width={shadowMapSize}
+        shadow-mapSize-height={shadowMapSize}
         shadow-camera-near={8}
-        shadow-camera-far={290}
-        shadow-camera-left={-114}
-        shadow-camera-right={114}
-        shadow-camera-top={114}
-        shadow-camera-bottom={-114}
-        shadow-bias={-0.00045}
-        shadow-normalBias={0.025}
+        shadow-camera-far={340}
+        shadow-camera-left={-128}
+        shadow-camera-right={128}
+        shadow-camera-top={128}
+        shadow-camera-bottom={-128}
+        shadow-bias={-0.0005}
+        shadow-normalBias={0.03}
       />
       <directionalLight
         position={[62, 54, 66]}
@@ -257,13 +313,17 @@ const SceneEnvironmentSetup: React.FC<{
   );
 };
 
-const CityWorldContent: React.FC<CitySceneProps & { isSoftwareGl: boolean }> = ({
+const CityWorldContent: React.FC<
+  CitySceneProps & { isSoftwareGl: boolean; isMobileGpu: boolean }
+> = ({
   plots,
+  expansionWorld,
   cameraMode,
   cinematicTour,
   timeOfDay,
   weather,
   selectedPlotId,
+  selectedExpansionPlotId,
   constructionDraft,
   playerProfile,
   sittingBenchId,
@@ -274,10 +334,13 @@ const CityWorldContent: React.FC<CitySceneProps & { isSoftwareGl: boolean }> = (
   focusTargetRef,
   birdAudioEnabled,
   onSelectPlot,
+  onSelectExpansionPlot,
+  onOpenMonumentModal,
   onSelectBench,
   onActiveInteractionChange,
   onTriggerPrimaryAction,
   isSoftwareGl,
+  isMobileGpu,
 }) => {
   const { gl } = useThree();
 
@@ -294,7 +357,12 @@ const CityWorldContent: React.FC<CitySceneProps & { isSoftwareGl: boolean }> = (
 
   return (
     <>
-      <SceneEnvironmentSetup timeOfDay={timeOfDay} weather={weather} isSoftwareGl={isSoftwareGl} />
+      <SceneEnvironmentSetup
+        timeOfDay={timeOfDay}
+        weather={weather}
+        isSoftwareGl={isSoftwareGl}
+        isMobileGpu={isMobileGpu}
+      />
       <NightStreetLights timeOfDay={timeOfDay} isSoftwareGl={isSoftwareGl} />
       <WindTimeUpdater />
       <CityCameraController
@@ -305,6 +373,7 @@ const CityWorldContent: React.FC<CitySceneProps & { isSoftwareGl: boolean }> = (
       <WalkingPlayerController
         cameraMode={cameraMode}
         plots={plots}
+        expansionWorld={expansionWorld}
         playerProfile={playerProfile}
         sittingBenchId={sittingBenchId}
         openDoors={openDoors}
@@ -331,6 +400,19 @@ const CityWorldContent: React.FC<CitySceneProps & { isSoftwareGl: boolean }> = (
         openDoors={openDoors}
         onSelectPlot={(p) => onSelectPlot(p)}
       />
+      {expansionWorld && (
+        <ExpandedCityRenderer
+          world={expansionWorld}
+          textures={textures}
+          timeOfDay={timeOfDay}
+          cameraMode={cameraMode}
+          playerPoseRef={playerPoseRef}
+          selectedExpansionPlotId={selectedExpansionPlotId ?? null}
+          openDoors={openDoors}
+          onSelectExpansionPlot={(ep) => onSelectExpansionPlot?.(ep)}
+          onOpenMonumentModal={() => onOpenMonumentModal?.()}
+        />
+      )}
       <TrafficManager timeOfDay={timeOfDay} vehicleStatesRef={vehicleStatesRef} />
       <PedestrianManager />
       <WeatherEffects weather={weather} timeOfDay={timeOfDay} />
@@ -347,20 +429,30 @@ const CityWorldContent: React.FC<CitySceneProps & { isSoftwareGl: boolean }> = (
 
 export const CityScene: React.FC<CitySceneProps> = (props) => {
   const isSoftwareGl = useMemo(() => detectSoftwareWebGL(), []);
+  const isMobileGpu = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia?.('(pointer: coarse)').matches ||
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    );
+  }, []);
 
   return (
     <div className="w-full h-full relative">
       <Canvas
-        shadows={!isSoftwareGl ? 'soft' : false}
-        dpr={isSoftwareGl ? 1 : [1, 1.75]}
-        camera={{ fov: 46, near: 0.3, far: 2200, position: [48, 38, 48] }}
+        shadows={isSoftwareGl ? false : isMobileGpu ? true : 'soft'}
+        dpr={isSoftwareGl ? 1 : isMobileGpu ? [1, 1.25] : [1, 1.6]}
+        camera={{ fov: 46, near: 0.4, far: 4200, position: [48, 38, 48] }}
         gl={{
           antialias: !isSoftwareGl,
           powerPreference: 'high-performance',
           toneMapping: THREE.ACESFilmicToneMapping,
           outputColorSpace: THREE.SRGBColorSpace,
         }}
-        onPointerMissed={() => props.onSelectPlot(null)}
+        onPointerMissed={() => {
+          props.onSelectPlot(null);
+          props.onSelectExpansionPlot?.(null);
+        }}
         onCreated={({ gl }) => {
           const canvas = gl.domElement;
           canvas.addEventListener('webglcontextlost', (e) => {
@@ -369,7 +461,7 @@ export const CityScene: React.FC<CitySceneProps> = (props) => {
           });
         }}
       >
-        <CityWorldContent {...props} isSoftwareGl={isSoftwareGl} />
+        <CityWorldContent {...props} isSoftwareGl={isSoftwareGl} isMobileGpu={isMobileGpu} />
       </Canvas>
     </div>
   );

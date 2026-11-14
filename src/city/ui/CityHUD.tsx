@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Award,
   BarChart3,
   Bird,
   Building2,
@@ -11,6 +12,8 @@ import {
   CloudRain,
   Coins,
   Compass,
+  Crown,
+  DoorOpen,
   ExternalLink,
   Eye,
   EyeOff,
@@ -22,10 +25,12 @@ import {
   Info,
   LogIn,
   LogOut,
+  Map as MapIcon,
   MapPin,
   Moon,
   Move,
   Music,
+  Navigation,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
@@ -33,6 +38,7 @@ import {
   Sun,
   Sunrise,
   Sunset,
+  Trash2,
   Trees,
   User,
   Users,
@@ -59,9 +65,21 @@ import {
 import { ARCHETYPE_LABELS, BUSINESS_LABELS } from '../registry/CityRegistry';
 import { DISTRICTS } from '../world/MasterTownBlueprint';
 import { townMultiplayerService, townVerificationService } from '../services/TownServices';
-import { sanitizeInstagramUrl } from '../firebase/firebaseClient';
+import { AdminRosterEntry, sanitizeInstagramUrl } from '../firebase/firebaseClient';
 import { PlayerPanel } from './PlayerPanel';
-import { AdminPanel, AdminPanelTab } from './AdminPanel';
+import {
+  AdminPanel,
+  AdminPanelTab,
+  FirestoreExpansionVerificationState,
+} from './AdminPanel';
+import { FullCityMapModal } from './FullCityMapModal';
+import { OGMonumentModal } from './OGMonumentModal';
+import type { ExpansionCityWorld } from '../expansion/ExpansionMasterPlan';
+import type {
+  ExpansionManifest,
+  ExpansionPlotSpec,
+  ParsedFollowerDataset,
+} from '../expansion/types';
 
 export interface InspectedVehicleInfo {
   id: string;
@@ -92,10 +110,21 @@ interface CityHUDProps {
   adminRouteRequested: boolean;
   adminPanelOpen: boolean;
   adminPanelTab: AdminPanelTab;
+  focusedAdminPlotId: string | null;
+  currentUserUid: string | null;
+  adminEntries: AdminRosterEntry[];
   residentRecords: Record<string, PrivateResidentRecord>;
   townSettings: TownPublicSettings;
   welcomeOpen: boolean;
   selectedPlot: TownPlot | null;
+  selectedExpansionPlot?: ExpansionPlotSpec | null;
+  expansionWorld?: ExpansionCityWorld | null;
+  followerDataset?: ParsedFollowerDataset | null;
+  expansionManifest?: ExpansionManifest | null;
+  firestoreVerifiedInfo?: FirestoreExpansionVerificationState | null;
+  openDoors?: Record<string, boolean>;
+  cityMapOpen?: boolean;
+  ogMonumentOpen?: boolean;
   constructionDraft: ConstructionDraft;
   editorFeedback: string | null;
   adminActionNotice: string | null;
@@ -115,6 +144,7 @@ interface CityHUDProps {
   onTogglePlayerPanel: () => void;
   onUpdateProfile: (patch: Partial<PlayerProfile>) => void;
   onTriggerInteraction: (actionId: InteractionActionId) => void;
+  onToggleDoor?: (plotId: string) => void;
   onCloseVehicleInspector: () => void;
   onCloseParkInspector: () => void;
   onCloseOwnerSpotlight: () => void;
@@ -130,6 +160,8 @@ interface CityHUDProps {
   onCloseWelcome: () => void;
   onToggleAdminPanel: (tab?: AdminPanelTab) => void;
   onChangeAdminTab: (tab: AdminPanelTab) => void;
+  onClearFocusedAdminPlot: () => void;
+  onManagePlotOwnership: (plotId: string) => void;
   onApproveResident: (params: {
     plotId: string;
     inGameUsername: string;
@@ -144,9 +176,25 @@ interface CityHUDProps {
     notes: string;
   }) => Promise<boolean>;
   onRevokeResident: (plotId: string) => Promise<boolean>;
+  onDemolishPlot: (plotId: string) => Promise<boolean>;
   onSaveTownSettings: (settings: TownPublicSettings) => Promise<boolean>;
+  onGrantAdmin: (targetUid: string) => Promise<boolean>;
+  onRevokeAdmin: (targetUid: string) => Promise<boolean>;
+  onSeedTownDefaults: () => Promise<boolean>;
   onSelectPlot: (plot: TownPlot | null) => void;
+  onSelectExpansionPlot?: (plot: ExpansionPlotSpec | null) => void;
+  onToggleCityMap?: (open?: boolean) => void;
+  onToggleOgMonument?: (open?: boolean) => void;
   onFocusLocation: (x: number, z: number, zoom?: number) => void;
+  onWalkToLocation?: (
+    x: number,
+    z: number,
+    expansionPlot?: ExpansionPlotSpec,
+    corePlot?: TownPlot,
+  ) => void;
+  onImportBundledZip?: (onProgress: (msg: string) => void) => Promise<boolean>;
+  onImportUploadedZip?: (file: File, onProgress: (msg: string) => void) => Promise<boolean>;
+  onVerifyExpansionInFirestore?: () => Promise<void>;
   onClaimBusinessPlot: (plotId: string, username: string) => void;
   onUpgradePlot: (plotId: string) => void;
   onCollectDailyRevenue: () => void;
@@ -189,10 +237,21 @@ export const CityHUD: React.FC<CityHUDProps> = ({
   adminRouteRequested,
   adminPanelOpen,
   adminPanelTab,
+  focusedAdminPlotId,
+  currentUserUid,
+  adminEntries,
   residentRecords,
   townSettings,
   welcomeOpen,
   selectedPlot,
+  selectedExpansionPlot,
+  expansionWorld,
+  followerDataset,
+  expansionManifest,
+  firestoreVerifiedInfo,
+  openDoors,
+  cityMapOpen = false,
+  ogMonumentOpen = false,
   constructionDraft,
   editorFeedback,
   adminActionNotice,
@@ -212,6 +271,7 @@ export const CityHUD: React.FC<CityHUDProps> = ({
   onTogglePlayerPanel,
   onUpdateProfile,
   onTriggerInteraction,
+  onToggleDoor,
   onCloseVehicleInspector,
   onCloseParkInspector,
   onCloseOwnerSpotlight,
@@ -227,12 +287,25 @@ export const CityHUD: React.FC<CityHUDProps> = ({
   onCloseWelcome,
   onToggleAdminPanel,
   onChangeAdminTab,
+  onClearFocusedAdminPlot,
+  onManagePlotOwnership,
   onApproveResident,
   onReassignResident,
   onRevokeResident,
+  onDemolishPlot,
   onSaveTownSettings,
+  onGrantAdmin,
+  onRevokeAdmin,
+  onSeedTownDefaults,
   onSelectPlot,
+  onSelectExpansionPlot,
+  onToggleCityMap,
+  onToggleOgMonument,
   onFocusLocation,
+  onWalkToLocation,
+  onImportBundledZip,
+  onImportUploadedZip,
+  onVerifyExpansionInFirestore,
   onClaimBusinessPlot,
   onUpgradePlot,
   onCollectDailyRevenue,
@@ -250,6 +323,7 @@ export const CityHUD: React.FC<CityHUDProps> = ({
     'none',
   );
   const [bizOwnerInput, setBizOwnerInput] = useState('');
+  const [confirmInspectorDemolishId, setConfirmInspectorDemolishId] = useState<string | null>(null);
 
   if (uiHidden) {
     return (
@@ -298,12 +372,45 @@ export const CityHUD: React.FC<CityHUDProps> = ({
             Lindenhof
           </h1>
           <span className="hidden sm:inline text-[11px] text-slate-300 font-mono-tabular whitespace-nowrap">
-            <span aria-hidden="true">·</span> {stats.totalPopulation} pop{' '}
+            <span aria-hidden="true">·</span> {stats.totalPopulation.toLocaleString()} pop{' '}
             <span aria-hidden="true">·</span> €{stats.townTreasury.toLocaleString()}
           </span>
         </div>
 
         <div className="pointer-events-auto flex items-center gap-1 shrink-0">
+          {onToggleCityMap && expansionWorld && (
+            <button
+              type="button"
+              onClick={() => onToggleCityMap(true)}
+              title="Complete City Map & House Finder"
+              className={`h-7 sm:h-8 flex items-center gap-1 px-1.5 sm:px-2 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors whitespace-nowrap ${
+                cityMapOpen
+                  ? 'bg-sky-500 text-slate-950 border-sky-300'
+                  : 'bg-[#10151c]/90 text-sky-200 border-sky-400/35 hover:bg-[#1c2430]'
+              }`}
+            >
+              <MapIcon className="w-3 h-3" />
+              <span className="hidden sm:inline">City Map</span>
+              <span className="sm:hidden">Map</span>
+            </button>
+          )}
+
+          {onToggleOgMonument && expansionWorld && (
+            <button
+              type="button"
+              onClick={() => onToggleOgMonument(true)}
+              title="50 OG Founders Recognition Monument"
+              className={`h-7 sm:h-8 flex items-center gap-1 px-1.5 sm:px-2 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors whitespace-nowrap ${
+                ogMonumentOpen
+                  ? 'bg-amber-500 text-slate-950 border-amber-300'
+                  : 'bg-[#10151c]/90 text-amber-200 border-amber-400/35 hover:bg-[#1c2430]'
+              }`}
+            >
+              <Award className="w-3 h-3" />
+              <span className="hidden md:inline">OG 50</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onTogglePlayerPanel}
@@ -532,6 +639,7 @@ export const CityHUD: React.FC<CityHUDProps> = ({
         open={playerPanelOpen}
         cameraMode={cameraMode}
         plots={plots}
+        expansionWorld={expansionWorld}
         playerProfile={playerProfile}
         playerCoords={playerCoords}
         activeInteraction={activeInteraction}
@@ -541,6 +649,9 @@ export const CityHUD: React.FC<CityHUDProps> = ({
         onChangeCameraMode={onChangeCameraMode}
         onFocusLocation={onFocusLocation}
         onSelectPlot={onSelectPlot}
+        onSelectExpansionPlot={onSelectExpansionPlot}
+        onOpenCityMap={onToggleCityMap ? () => onToggleCityMap(true) : undefined}
+        onOpenMonumentModal={onToggleOgMonument ? () => onToggleOgMonument(true) : undefined}
         onUpdateProfile={onUpdateProfile}
         onTriggerInteraction={onTriggerInteraction}
       />
@@ -551,27 +662,194 @@ export const CityHUD: React.FC<CityHUDProps> = ({
           open={adminPanelOpen}
           activeTab={adminPanelTab}
           plots={plots}
+          selectedPlot={selectedPlot}
+          focusedPlotId={focusedAdminPlotId}
+          currentUserUid={currentUserUid}
+          adminEntries={adminEntries}
           residentRecords={residentRecords}
           townSettings={townSettings}
           constructionDraft={constructionDraft}
           editorFeedback={editorFeedback}
           adminActionNotice={adminActionNotice}
+          followerDataset={followerDataset}
+          expansionWorld={expansionWorld}
+          expansionManifest={expansionManifest}
+          firestoreVerifiedInfo={firestoreVerifiedInfo}
           onChangeTab={onChangeAdminTab}
           onClose={() => onToggleAdminPanel()}
+          onClearFocusedPlot={onClearFocusedAdminPlot}
           onFocusLocation={onFocusLocation}
           onSelectPlot={onSelectPlot}
           onApproveResident={onApproveResident}
           onReassignResident={onReassignResident}
           onRevokeResident={onRevokeResident}
+          onDemolishPlot={onDemolishPlot}
           onSaveTownSettings={onSaveTownSettings}
+          onGrantAdmin={onGrantAdmin}
+          onRevokeAdmin={onRevokeAdmin}
+          onSeedTownDefaults={onSeedTownDefaults}
           onUpdateConstructionDraft={onUpdateConstructionDraft}
           onConfirmConstruction={onConfirmConstruction}
+          onImportBundledZip={onImportBundledZip}
+          onImportUploadedZip={onImportUploadedZip}
+          onVerifyExpansionInFirestore={onVerifyExpansionInFirestore}
         />
       )}
 
       {/* Responsive Inspector Stack — Cleanly Below Top Bar on Mobile & Top-Right on Desktop */}
-      {(selectedPlot || inspectedVehicle || inspectedPark || ownerSpotlightPlot) && (
+      {(selectedPlot ||
+        selectedExpansionPlot ||
+        inspectedVehicle ||
+        inspectedPark ||
+        ownerSpotlightPlot) && (
         <div className="fixed top-11 inset-x-2 sm:inset-x-auto sm:right-3 sm:w-80 z-25 flex flex-col gap-2 items-stretch sm:items-end max-h-[54vh] overflow-y-auto pointer-events-none">
+          {selectedExpansionPlot && (
+            <aside className="pointer-events-auto w-full rounded-xl bg-[#10151c]/95 border border-amber-400/35 p-3 shadow-2xl text-slate-100">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] text-amber-300 font-mono-tabular">
+                      {selectedExpansionPlot.plotCode}
+                    </span>
+                    {selectedExpansionPlot.resident && (
+                      <span className="text-[10px] text-slate-400 font-mono-tabular">
+                        · {selectedExpansionPlot.resident.residentId}
+                      </span>
+                    )}
+                    {selectedExpansionPlot.status === 'vip' && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-bold uppercase tracking-wider">
+                        ★ VIP #1
+                      </span>
+                    )}
+                    {selectedExpansionPlot.status === 'og' && selectedExpansionPlot.resident && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 text-amber-200 text-[9px] font-semibold">
+                        OG #{selectedExpansionPlot.resident.ogRank}
+                      </span>
+                    )}
+                    {selectedExpansionPlot.status === 'occupied' && (
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/35 text-emerald-200 text-[9px] font-semibold">
+                        Resident
+                      </span>
+                    )}
+                    {selectedExpansionPlot.status === 'expansion-open' && (
+                      <span className="px-1.5 py-0.5 rounded bg-sky-500/20 border border-sky-400/35 text-sky-200 text-[9px] font-semibold">
+                        Open Survey
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="text-sm font-semibold text-white mt-0.5 truncate flex items-center gap-1.5">
+                    {selectedExpansionPlot.status === 'vip' && (
+                      <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    )}
+                    <span className="truncate">
+                      {selectedExpansionPlot.resident
+                        ? `@${selectedExpansionPlot.resident.username}`
+                        : 'Future Expansion Plot'}
+                    </span>
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close expansion house inspector"
+                  onClick={() => onSelectExpansionPlot?.(null)}
+                  className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-white/10 cursor-pointer shrink-0"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="mt-2 pt-2 border-t border-white/10 text-[11px] text-slate-300 space-y-1">
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-400">District</span>
+                  <span className="text-slate-100 font-medium truncate">
+                    {selectedExpansionPlot.districtName}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-400">Address</span>
+                  <span className="text-slate-200 truncate">{selectedExpansionPlot.address}</span>
+                </div>
+                {selectedExpansionPlot.resident && (
+                  <>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">Followed</span>
+                      <span className="font-mono-tabular text-amber-200 truncate">
+                        {selectedExpansionPlot.resident.joinedAt || 'Verified archive'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">Chronological Rank</span>
+                      <span className="font-mono-tabular text-emerald-300">
+                        #{selectedExpansionPlot.resident.oldestRank.toLocaleString()} oldest
+                      </span>
+                    </div>
+                  </>
+                )}
+                {selectedExpansionPlot.houseStyle && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-400">Architecture</span>
+                    <span className="text-sky-200 truncate">
+                      {ARCHETYPE_LABELS[selectedExpansionPlot.houseStyle.archetype]} ·{' '}
+                      {selectedExpansionPlot.houseStyle.floors}F
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-2.5 pt-2 border-t border-white/10 flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onFocusLocation(selectedExpansionPlot.x, selectedExpansionPlot.z, 36)
+                  }
+                  className="flex-1 min-h-[32px] flex items-center justify-center gap-1 px-2 rounded-md bg-[#1c2430] hover:bg-[#263142] border border-white/12 text-[11px] font-medium text-white cursor-pointer"
+                >
+                  <Navigation className="w-3 h-3 text-sky-300" />
+                  <span>Fly</span>
+                </button>
+                {onWalkToLocation && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onWalkToLocation(
+                        selectedExpansionPlot.x,
+                        selectedExpansionPlot.z,
+                        selectedExpansionPlot,
+                      )
+                    }
+                    className="flex-1 min-h-[32px] flex items-center justify-center gap-1 px-2 rounded-md bg-amber-500 hover:bg-amber-400 text-[11px] font-semibold text-slate-950 cursor-pointer"
+                  >
+                    <Footprints className="w-3 h-3" />
+                    <span>Walk Here</span>
+                  </button>
+                )}
+                {(selectedExpansionPlot.houseStyle || selectedExpansionPlot.status === 'vip') &&
+                  onToggleDoor && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleDoor(selectedExpansionPlot.plotId)}
+                      className="min-h-[32px] flex items-center justify-center gap-1 px-2 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/35 text-[11px] font-medium text-emerald-200 cursor-pointer"
+                    >
+                      <DoorOpen className="w-3 h-3" />
+                      <span>
+                        {openDoors?.[selectedExpansionPlot.plotId] ? 'Close Door' : 'Open Door'}
+                      </span>
+                    </button>
+                  )}
+                {(selectedExpansionPlot.status === 'vip' || selectedExpansionPlot.status === 'og') &&
+                  onToggleOgMonument && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleOgMonument(true)}
+                      className="w-full min-h-[30px] flex items-center justify-center gap-1 px-2 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/35 text-[11px] font-medium text-amber-200 cursor-pointer"
+                    >
+                      <Award className="w-3 h-3" />
+                      <span>Open OG 50 Monument</span>
+                    </button>
+                  )}
+              </div>
+            </aside>
+          )}
           {selectedPlot && (
             <aside className="pointer-events-auto w-full rounded-xl bg-[#10151c]/94 border border-white/14 p-3 shadow-2xl text-slate-100">
               <div className="flex items-start justify-between gap-2">
@@ -700,15 +978,36 @@ export const CityHUD: React.FC<CityHUDProps> = ({
                         <span>Move</span>
                       </button>
                     )}
+                    {(selectedPlot.house || selectedPlot.business) &&
+                      !selectedPlot.publicBuilding &&
+                      selectedPlot.category !== 'public' &&
+                      (confirmInspectorDemolishId === selectedPlot.id ? (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await onDemolishPlot(selectedPlot.id);
+                            setConfirmInspectorDemolishId(null);
+                          }}
+                          className="h-7 px-2 rounded-md bg-rose-500 hover:bg-rose-400 text-slate-950 text-[11px] font-semibold cursor-pointer"
+                        >
+                          Confirm Demolish
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmInspectorDemolishId(selectedPlot.id)}
+                          className="h-7 flex items-center gap-1 px-2 rounded-md bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/30 text-[11px] text-rose-200 cursor-pointer"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Demolish</span>
+                        </button>
+                      ))}
                   </div>
 
                   {!selectedPlot.publicBuilding && !selectedPlot.business && (
                     <button
                       type="button"
-                      onClick={() => {
-                        onChangeAdminTab('residents');
-                        if (!adminPanelOpen) onToggleAdminPanel('residents');
-                      }}
+                      onClick={() => onManagePlotOwnership(selectedPlot.id)}
                       className="w-full h-7 rounded-md bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-[11px] font-semibold cursor-pointer"
                     >
                       Manage Ownership
@@ -727,7 +1026,7 @@ export const CityHUD: React.FC<CityHUDProps> = ({
                     >
                       <input
                         type="text"
-                        maxLength={22}
+                        maxLength={32}
                         value={bizOwnerInput}
                         onChange={(e) => setBizOwnerInput(e.target.value)}
                         placeholder="Owner @handle"
@@ -1310,6 +1609,56 @@ export const CityHUD: React.FC<CityHUDProps> = ({
           </div>
         </nav>
       </div>
+
+      {/* Interactive Bird's-Eye Complete City Map Modal */}
+      {expansionWorld && onToggleCityMap && (
+        <FullCityMapModal
+          isOpen={cityMapOpen}
+          onClose={() => onToggleCityMap(false)}
+          corePlots={plots}
+          expansionWorld={expansionWorld}
+          playerPose={playerCoords}
+          onFlyTo={(x, z, expPlot, corePlot) => {
+            if (expPlot) {
+              onSelectPlot(null);
+              onSelectExpansionPlot?.(expPlot);
+            } else if (corePlot) {
+              onSelectExpansionPlot?.(null);
+              onSelectPlot(corePlot);
+            }
+            onFocusLocation(x, z, 42);
+            onToggleCityMap(false);
+          }}
+          onWalkTo={(x, z, expPlot, corePlot) => {
+            onWalkToLocation?.(x, z, expPlot, corePlot);
+            onToggleCityMap(false);
+          }}
+          onOpenMonument={() => {
+            onToggleCityMap(false);
+            onToggleOgMonument?.(true);
+          }}
+        />
+      )}
+
+      {/* 50 OG Founders & Sweet_thedevil Royal Recognition Monument Modal */}
+      {expansionWorld && onToggleOgMonument && (
+        <OGMonumentModal
+          isOpen={ogMonumentOpen}
+          onClose={() => onToggleOgMonument(false)}
+          vipPlot={expansionWorld.vipPlot}
+          ogPlots={expansionWorld.ogPlots}
+          onVisitPlot={(plot, mode) => {
+            onSelectPlot(null);
+            onSelectExpansionPlot?.(plot);
+            if (mode === 'walk' && onWalkToLocation) {
+              onWalkToLocation(plot.x, plot.z, plot);
+            } else {
+              onFocusLocation(plot.x, plot.z, 38);
+            }
+            onToggleOgMonument(false);
+          }}
+        />
+      )}
     </>
   );
 };
