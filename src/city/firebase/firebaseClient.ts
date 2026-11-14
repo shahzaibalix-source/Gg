@@ -15,14 +15,21 @@ import {
   getDocFromServer,
   getDocsFromServer,
   getFirestore,
+  limit,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
+  where,
   writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../../../firebase-applet-config.json';
 import {
+  PlotCustomization,
+  PlotGuestbookEntry,
+  PlotUpgradeId,
   PrivateResidentRecord,
+  ResidentWallet,
   TownPlot,
   TownPublicSettings,
   UserRole,
@@ -816,3 +823,424 @@ export async function adminImportExpansionToFirestore(params: {
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
+
+// -----------------------------------------------------------------------------
+// Resident Daily Check-In, Town Currency Wallet, Plot Upgrades & Guestbook
+// -----------------------------------------------------------------------------
+
+export function getUtcDayString(date = new Date()): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export function getPreviousUtcDayString(dayStr: string): string {
+  const dt = new Date(`${dayStr}T00:00:00.000Z`);
+  if (Number.isNaN(dt.getTime())) return '';
+  dt.setUTCDate(dt.getUTCDate() - 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+export function computeDailyCheckInReward(nextStreak: number): number {
+  return 100 + Math.min(Math.max(0, nextStreak - 1), 6) * 25;
+}
+
+export const PLOT_UPGRADE_CATALOG: ReadonlyArray<{
+  id: PlotUpgradeId;
+  name: string;
+  description: string;
+  cost: number;
+}> = [
+  {
+    id: 'driveway-lights',
+    name: 'Warm Driveway Post Lamps',
+    description: 'Twin warm-amber garden post lanterns flanking your plot walkway at dusk & night.',
+    cost: 100,
+  },
+  {
+    id: 'flower-planters',
+    name: 'Manicured Flower Planters',
+    description: 'Vibrant blooming front-porch planters and decorative garden borders.',
+    cost: 150,
+  },
+  {
+    id: 'garden-fountain',
+    name: 'Courtyard Stone Birdbath Fountain',
+    description: 'Tiered European stone fountain ornament installed in your front garden.',
+    cost: 250,
+  },
+  {
+    id: 'festive-garland',
+    name: 'Evening Warm String Garland',
+    description: 'Golden canopy eaves lights welcoming visitors along your porch roofline.',
+    cost: 300,
+  },
+];
+
+export function subscribeResidentWallet(
+  uid: string,
+  onWallet: (wallet: ResidentWallet | null) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const path = `resident_wallets/${uid}`;
+  return onSnapshot(
+    doc(db, 'resident_wallets', uid),
+    (snap) => {
+      if (!snap.exists()) {
+        onWallet(null);
+        return;
+      }
+      const d = snap.data();
+      onWallet({
+        uid: String(d.uid ?? uid),
+        balance: Number(d.balance ?? 0),
+        streakDays: Number(d.streakDays ?? 0),
+        lastCheckInDay: String(d.lastCheckInDay ?? ''),
+        totalCheckIns: Number(d.totalCheckIns ?? 0),
+        linkedPlotId: String(d.linkedPlotId ?? ''),
+        linkedPlotCode: String(d.linkedPlotCode ?? ''),
+        linkedUsername: String(d.linkedUsername ?? ''),
+      });
+    },
+    (err) => {
+      if (onError) onError(err);
+      else handleFirestoreError(err, OperationType.GET, path);
+    },
+  );
+}
+
+export async function linkPlotToResidentWallet(params: {
+  uid: string;
+  plotId: string;
+  plotCode: string;
+  username: string;
+  currentWallet: ResidentWallet | null;
+}): Promise<ResidentWallet> {
+  const { uid, plotId, plotCode, username, currentWallet } = params;
+  const path = `resident_wallets/${uid}`;
+  const cleanPlotId = plotId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  const cleanPlotCode = plotCode.trim().slice(0, 24);
+  const cleanUsername = username.trim().slice(0, 32);
+
+  const nextWallet: ResidentWallet = {
+    uid,
+    balance: currentWallet?.balance ?? 0,
+    streakDays: currentWallet?.streakDays ?? 0,
+    lastCheckInDay: currentWallet?.lastCheckInDay ?? '',
+    totalCheckIns: currentWallet?.totalCheckIns ?? 0,
+    linkedPlotId: cleanPlotId,
+    linkedPlotCode: cleanPlotCode,
+    linkedUsername: cleanUsername,
+  };
+
+  try {
+    await setDoc(doc(db, 'resident_wallets', uid), {
+      ...nextWallet,
+      updatedAt: serverTimestamp(),
+    });
+    return nextWallet;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function performDailyPlotCheckIn(params: {
+  uid: string;
+  plotId: string;
+  plotCode: string;
+  username: string;
+  currentWallet: ResidentWallet | null;
+  currentCustomization: PlotCustomization | null;
+}): Promise<{ wallet: ResidentWallet; customization: PlotCustomization; reward: number }> {
+  const { uid, plotId, plotCode, username, currentWallet, currentCustomization } = params;
+  const today = getUtcDayString();
+  const yesterday = getPreviousUtcDayString(today);
+
+  if (currentWallet?.lastCheckInDay === today) {
+    throw new Error('You have already checked in today. Come back tomorrow UTC!');
+  }
+
+  const cleanPlotId = plotId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  const cleanPlotCode = plotCode.trim().slice(0, 24);
+  const cleanUsername = username.trim().slice(0, 32);
+
+  const nextStreak =
+    currentWallet?.lastCheckInDay === yesterday ? (currentWallet.streakDays || 0) + 1 : 1;
+  const reward = computeDailyCheckInReward(nextStreak);
+
+  const nextWallet: ResidentWallet = {
+    uid,
+    balance: (currentWallet?.balance ?? 0) + reward,
+    streakDays: nextStreak,
+    lastCheckInDay: today,
+    totalCheckIns: (currentWallet?.totalCheckIns ?? 0) + 1,
+    linkedPlotId: cleanPlotId,
+    linkedPlotCode: cleanPlotCode,
+    linkedUsername: cleanUsername,
+  };
+
+  const canWritePlotCust =
+    !currentCustomization || currentCustomization.ownerUid === uid;
+
+  const nextCustomization: PlotCustomization = {
+    plotId: cleanPlotId,
+    ownerUid: currentCustomization?.ownerUid || uid,
+    ownerUsername: currentCustomization?.ownerUsername || cleanUsername,
+    bio: currentCustomization?.bio ?? '',
+    hasDrivewayLights: currentCustomization?.hasDrivewayLights ?? false,
+    hasFlowerPlanters: currentCustomization?.hasFlowerPlanters ?? false,
+    hasGardenFountain: currentCustomization?.hasGardenFountain ?? false,
+    hasFestiveGarland: currentCustomization?.hasFestiveGarland ?? false,
+    upgradeTier: currentCustomization?.upgradeTier ?? 0,
+    checkInCount: (currentCustomization?.checkInCount ?? 0) + 1,
+    lastCheckInDay: today,
+  };
+
+  const path = `resident_wallets/${uid}`;
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'resident_wallets', uid), {
+      ...nextWallet,
+      updatedAt: serverTimestamp(),
+    });
+    if (canWritePlotCust) {
+      batch.set(doc(db, 'plot_customizations', cleanPlotId), {
+        ...nextCustomization,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    await batch.commit();
+    return { wallet: nextWallet, customization: nextCustomization, reward };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function purchasePlotUpgradeInFirestore(params: {
+  uid: string;
+  plotId: string;
+  username: string;
+  upgradeId: PlotUpgradeId;
+  cost: number;
+  currentWallet: ResidentWallet;
+  currentCustomization: PlotCustomization | null;
+}): Promise<{ wallet: ResidentWallet; customization: PlotCustomization }> {
+  const { uid, plotId, username, upgradeId, cost, currentWallet, currentCustomization } = params;
+  if (currentWallet.balance < cost) {
+    throw new Error(`Need ${cost} LDF Coins to unlock this upgrade.`);
+  }
+
+  const cleanPlotId = plotId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  if (currentCustomization && currentCustomization.ownerUid !== uid) {
+    throw new Error('This plot customization belongs to another verified owner.');
+  }
+
+  const baseCust: PlotCustomization = currentCustomization ?? {
+    plotId: cleanPlotId,
+    ownerUid: uid,
+    ownerUsername: username.trim().slice(0, 32),
+    bio: '',
+    hasDrivewayLights: false,
+    hasFlowerPlanters: false,
+    hasGardenFountain: false,
+    hasFestiveGarland: false,
+    upgradeTier: 0,
+    checkInCount: 0,
+    lastCheckInDay: '',
+  };
+
+  const nextCust: PlotCustomization = {
+    ...baseCust,
+    hasDrivewayLights: baseCust.hasDrivewayLights || upgradeId === 'driveway-lights',
+    hasFlowerPlanters: baseCust.hasFlowerPlanters || upgradeId === 'flower-planters',
+    hasGardenFountain: baseCust.hasGardenFountain || upgradeId === 'garden-fountain',
+    hasFestiveGarland: baseCust.hasFestiveGarland || upgradeId === 'festive-garland',
+    upgradeTier: 0,
+  };
+  nextCust.upgradeTier =
+    Number(nextCust.hasDrivewayLights) +
+    Number(nextCust.hasFlowerPlanters) +
+    Number(nextCust.hasGardenFountain) +
+    Number(nextCust.hasFestiveGarland);
+
+  const nextWallet: ResidentWallet = {
+    ...currentWallet,
+    balance: currentWallet.balance - cost,
+  };
+
+  const path = `plot_customizations/${cleanPlotId}`;
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'resident_wallets', uid), {
+      ...nextWallet,
+      updatedAt: serverTimestamp(),
+    });
+    batch.set(doc(db, 'plot_customizations', cleanPlotId), {
+      ...nextCust,
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+    return { wallet: nextWallet, customization: nextCust };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function savePlotBioInFirestore(params: {
+  uid: string;
+  plotId: string;
+  username: string;
+  bio: string;
+  currentCustomization: PlotCustomization | null;
+}): Promise<PlotCustomization> {
+  const { uid, plotId, username, bio, currentCustomization } = params;
+  const cleanPlotId = plotId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  if (currentCustomization && currentCustomization.ownerUid !== uid) {
+    throw new Error('Only the verified plot holder may edit this greeting.');
+  }
+  const nextCust: PlotCustomization = {
+    plotId: cleanPlotId,
+    ownerUid: currentCustomization?.ownerUid ?? uid,
+    ownerUsername: currentCustomization?.ownerUsername ?? username.trim().slice(0, 32),
+    bio: bio.trim().slice(0, 160),
+    hasDrivewayLights: currentCustomization?.hasDrivewayLights ?? false,
+    hasFlowerPlanters: currentCustomization?.hasFlowerPlanters ?? false,
+    hasGardenFountain: currentCustomization?.hasGardenFountain ?? false,
+    hasFestiveGarland: currentCustomization?.hasFestiveGarland ?? false,
+    upgradeTier: currentCustomization?.upgradeTier ?? 0,
+    checkInCount: currentCustomization?.checkInCount ?? 0,
+    lastCheckInDay: currentCustomization?.lastCheckInDay ?? '',
+  };
+  const path = `plot_customizations/${cleanPlotId}`;
+  try {
+    await setDoc(doc(db, 'plot_customizations', cleanPlotId), {
+      ...nextCust,
+      updatedAt: serverTimestamp(),
+    });
+    return nextCust;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export function subscribePlotCustomizations(
+  onMap: (map: Record<string, PlotCustomization>) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const path = 'plot_customizations';
+  return onSnapshot(
+    collection(db, path),
+    (snap) => {
+      const next: Record<string, PlotCustomization> = {};
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        const pid = String(d.plotId ?? docSnap.id);
+        next[pid] = {
+          plotId: pid,
+          ownerUid: String(d.ownerUid ?? ''),
+          ownerUsername: String(d.ownerUsername ?? ''),
+          bio: String(d.bio ?? ''),
+          hasDrivewayLights: Boolean(d.hasDrivewayLights),
+          hasFlowerPlanters: Boolean(d.hasFlowerPlanters),
+          hasGardenFountain: Boolean(d.hasGardenFountain),
+          hasFestiveGarland: Boolean(d.hasFestiveGarland),
+          upgradeTier: Number(d.upgradeTier ?? 0),
+          checkInCount: Number(d.checkInCount ?? 0),
+          lastCheckInDay: String(d.lastCheckInDay ?? ''),
+        };
+      });
+      onMap(next);
+    },
+    (err) => {
+      if (onError) onError(err);
+      else handleFirestoreError(err, OperationType.LIST, path);
+    },
+  );
+}
+
+export function subscribePlotGuestbook(
+  plotId: string,
+  onEntries: (entries: PlotGuestbookEntry[]) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const cleanPlotId = plotId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  const path = 'plot_guestbook';
+  const q = query(
+    collection(db, path),
+    where('plotId', '==', cleanPlotId),
+    limit(25),
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: PlotGuestbookEntry[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data();
+        let createdAt = '';
+        if (d.createdAt && typeof d.createdAt.toDate === 'function') {
+          createdAt = (d.createdAt.toDate() as Date).toISOString();
+        }
+        list.push({
+          entryId: String(d.entryId ?? docSnap.id),
+          plotId: String(d.plotId ?? cleanPlotId),
+          authorUid: String(d.authorUid ?? ''),
+          authorName: String(d.authorName ?? 'Visitor'),
+          message: String(d.message ?? ''),
+          createdAt,
+        });
+      });
+      list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      onEntries(list);
+    },
+    (err) => {
+      if (onError) onError(err);
+      else handleFirestoreError(err, OperationType.LIST, path);
+    },
+  );
+}
+
+export async function addPlotGuestbookEntryInFirestore(params: {
+  plotId: string;
+  authorUid: string;
+  authorName: string;
+  message: string;
+}): Promise<PlotGuestbookEntry> {
+  const { plotId, authorUid, authorName, message } = params;
+  const cleanPlotId = plotId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  const cleanName = (authorName.trim() || 'Resident').slice(0, 32);
+  const cleanMsg = message.trim().slice(0, 180);
+  if (!cleanMsg) {
+    throw new Error('Guestbook note cannot be empty.');
+  }
+  const entryId = `gb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const path = `plot_guestbook/${entryId}`;
+  try {
+    await setDoc(doc(db, 'plot_guestbook', entryId), {
+      entryId,
+      plotId: cleanPlotId,
+      authorUid: authorUid.slice(0, 128),
+      authorName: cleanName,
+      message: cleanMsg,
+      createdAt: serverTimestamp(),
+    });
+    return {
+      entryId,
+      plotId: cleanPlotId,
+      authorUid,
+      authorName: cleanName,
+      message: cleanMsg,
+      createdAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+export async function deletePlotGuestbookEntryInFirestore(entryId: string): Promise<void> {
+  const cleanId = entryId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+  const path = `plot_guestbook/${cleanId}`;
+  try {
+    await deleteDoc(doc(db, 'plot_guestbook', cleanId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+

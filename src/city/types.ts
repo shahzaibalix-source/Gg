@@ -59,7 +59,10 @@ export type CinematicTourId =
   | 'residential-flyover'
   | 'luxury-flyover'
   | 'commercial-park-tour'
-  | 'full-town-loop';
+  | 'full-town-loop'
+  | 'grand-7-district-tour'
+  | 'central-gardens-orbit'
+  | 'lakeside-sunset-cruise';
 
 export type TimeOfDay = 'morning' | 'afternoon' | 'sunset' | 'night';
 
@@ -118,7 +121,9 @@ export type InteractionActionId =
   | 'explore-park'
   | 'view-park-info'
   | 'view-town-info'
-  | 'open-og-monument';
+  | 'open-og-monument'
+  | 'check-in-plot'
+  | 'sign-guestbook';
 
 export interface InteractionButtonSpec {
   id: InteractionActionId;
@@ -286,3 +291,44 @@ export interface ConstructionDraft {
   businessCategory: BusinessCategory;
   rotationQuarterTurns: 0 | 1 | 2 | 3;
 }
+
+export type PlotUpgradeId =
+  | 'driveway-lights'
+  | 'flower-planters'
+  | 'garden-fountain'
+  | 'festive-garland';
+
+export interface ResidentWallet {
+  uid: string;
+  balance: number;
+  streakDays: number;
+  lastCheckInDay: string;
+  totalCheckIns: number;
+  linkedPlotId: string;
+  linkedPlotCode: string;
+  linkedUsername: string;
+}
+
+export interface PlotCustomization {
+  plotId: string;
+  ownerUid: string;
+  ownerUsername: string;
+  bio: string;
+  hasDrivewayLights: boolean;
+  hasFlowerPlanters: boolean;
+  hasGardenFountain: boolean;
+  hasFestiveGarland: boolean;
+  upgradeTier: number;
+  checkInCount: number;
+  lastCheckInDay: string;
+}
+
+export interface PlotGuestbookEntry {
+  entryId: string;
+  plotId: string;
+  authorUid: string;
+  authorName: string;
+  message: string;
+  createdAt: string;
+}
+

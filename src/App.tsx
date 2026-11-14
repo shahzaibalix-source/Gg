@@ -9,7 +9,11 @@ import {
   MobileInputState,
   NearbyInteractable,
   PlayerProfile,
+  PlotCustomization,
+  PlotGuestbookEntry,
+  PlotUpgradeId,
   PrivateResidentRecord,
+  ResidentWallet,
   TimeOfDay,
   TownPlot,
   TownPublicSettings,
@@ -54,6 +58,7 @@ import {
 import {
   AdminRosterEntry,
   DEFAULT_TOWN_SETTINGS,
+  addPlotGuestbookEntryInFirestore,
   adminAssignResidentInFirestore,
   adminDemolishPlotInFirestore,
   adminGrantAdminInFirestore,
@@ -65,15 +70,23 @@ import {
   adminSaveTownSettingsToFirestore,
   adminSaveTreasuryToFirestore,
   adminSeedTownDefaultsInFirestore,
+  deletePlotGuestbookEntryInFirestore,
+  linkPlotToResidentWallet,
   loadExpansionDirectoryShardsFromServer,
+  performDailyPlotCheckIn,
+  purchasePlotUpgradeInFirestore,
   resolveBackendUserRole,
   sanitizeInstagramUrl,
+  savePlotBioInFirestore,
   signInWithGoogle,
   signOutUser,
   subscribeAdminResidentRecords,
   subscribeAdmins,
   subscribeAuthState,
   subscribeExpansionManifest,
+  subscribePlotCustomizations,
+  subscribePlotGuestbook,
+  subscribeResidentWallet,
   subscribeTownEconomy,
   subscribeTownPlots,
   subscribeTownSettings,
@@ -217,6 +230,7 @@ export default function App() {
   // Admin-Only Firebase Auth State (Visitors are completely login-free)
   const [userRole, setUserRole] = useState<UserRole>('visitor');
   const [currentUserUid, setCurrentUserUid] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState<string>('Resident');
   const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [adminRouteRequested, setAdminRouteRequested] = useState<boolean>(() =>
@@ -243,6 +257,15 @@ export default function App() {
     useState<FirestoreExpansionVerificationState | null>(null);
   const [cityMapOpen, setCityMapOpen] = useState(false);
   const [ogMonumentOpen, setOgMonumentOpen] = useState(false);
+  const [checkInModalOpen, setCheckInModalOpen] = useState(false);
+  const [districtDrawerOpen, setDistrictDrawerOpen] = useState(false);
+  const [wallet, setWallet] = useState<ResidentWallet | null>(null);
+  const [plotCustomizations, setPlotCustomizations] = useState<Record<string, PlotCustomization>>(
+    {},
+  );
+  const [guestbookEntries, setGuestbookEntries] = useState<PlotGuestbookEntry[]>([]);
+  const [checkInBusy, setCheckInBusy] = useState(false);
+  const [checkInNotice, setCheckInNotice] = useState<string | null>(null);
 
   const [constructionDraft, setConstructionDraft] = useState<ConstructionDraft>(INITIAL_DRAFT);
   const [editorFeedback, setEditorFeedback] = useState<string | null>(null);
@@ -342,7 +365,7 @@ export default function App() {
     }
   }, [authLoading, adminRouteRequested, userRole]);
 
-  // Subscribe to Firebase Authentication strictly for Admin verification
+  // Subscribe to Firebase Authentication strictly for Admin & Resident Wallet verification
   useEffect(() => {
     let authSeq = 0;
     const unsubscribe = subscribeAuthState(async (user) => {
@@ -351,7 +374,9 @@ export default function App() {
       if (!user) {
         if (seq !== authSeq) return;
         setCurrentUserUid(null);
+        setCurrentUserName('Resident');
         setUserRole('visitor');
+        setWallet(null);
         setResidentRecords({});
         setAdminPanelOpen(false);
         setConstructionDraft(INITIAL_DRAFT);
@@ -359,10 +384,16 @@ export default function App() {
         return;
       }
 
+      const display =
+        user.displayName?.trim() ||
+        user.email?.split('@')[0]?.trim() ||
+        'Resident';
+
       try {
         const resolvedRole = await resolveBackendUserRole(user);
         if (seq !== authSeq) return;
         setCurrentUserUid(user.uid);
+        setCurrentUserName(display);
         setUserRole(resolvedRole);
         if (resolvedRole !== 'super-admin') {
           setAdminPanelOpen(false);
@@ -373,6 +404,7 @@ export default function App() {
         if (seq !== authSeq) return;
         console.error('Admin verification check error:', err);
         setCurrentUserUid(user.uid);
+        setCurrentUserName(display);
         setUserRole('visitor');
       } finally {
         if (seq === authSeq) {
@@ -382,6 +414,55 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Subscribe to signed-in resident's coin wallet
+  useEffect(() => {
+    if (!currentUserUid) {
+      setWallet(null);
+      return;
+    }
+    const unsubWallet = subscribeResidentWallet(
+      currentUserUid,
+      (nextWallet) => setWallet(nextWallet),
+      (err) => {
+        console.warn('Resident wallet listener:', err.message);
+        if (err.message.toLowerCase().includes('permission')) {
+          setCheckInNotice(
+            'Cloud wallet permissions are awaiting Firestore rules deployment by the project owner.',
+          );
+        }
+      },
+    );
+    return () => unsubWallet();
+  }, [currentUserUid]);
+
+  // Subscribe to public 3D plot customizations & bios
+  useEffect(() => {
+    const unsubCust = subscribePlotCustomizations(
+      (map) => setPlotCustomizations(map),
+      (err) => {
+        console.warn('Plot customizations listener:', err.message);
+      },
+    );
+    return () => unsubCust();
+  }, []);
+
+  // Subscribe to live House Guestbook for currently inspected expansion plot
+  useEffect(() => {
+    const pid = selectedExpansionPlot?.plotId;
+    if (!pid) {
+      setGuestbookEntries([]);
+      return;
+    }
+    const unsubGuestbook = subscribePlotGuestbook(
+      pid,
+      (entries) => setGuestbookEntries(entries),
+      (err) => {
+        console.warn('Plot guestbook listener:', err.message);
+      },
+    );
+    return () => unsubGuestbook();
+  }, [selectedExpansionPlot?.plotId]);
 
   // Subscribe to private resident records & admin roster strictly when Super Admin is verified
   useEffect(() => {
@@ -572,6 +653,8 @@ export default function App() {
           setWelcomeOpen(false);
           setCityMapOpen(false);
           setOgMonumentOpen(false);
+          setCheckInModalOpen(false);
+          setDistrictDrawerOpen(false);
           setSelectedExpansionPlot(null);
           setConstructionDraft(INITIAL_DRAFT);
           setEditorFeedback(null);
@@ -741,6 +824,32 @@ export default function App() {
         const pid = activeInteraction.plotId ?? activeInteraction.expansionPlotId;
         if (pid) {
           setOpenDoors((prev) => ({ ...prev, [pid]: !prev[pid] }));
+        }
+        return;
+      }
+
+      if (actionId === 'check-in-plot') {
+        if (activeInteraction.expansionPlotId && expansionWorld) {
+          const ep = expansionWorld.plotById.get(activeInteraction.expansionPlotId) ?? null;
+          if (ep) {
+            setSelectedExpansionPlot(ep);
+            setSelectedPlot(null);
+          }
+        }
+        setCheckInModalOpen(true);
+        return;
+      }
+
+      if (actionId === 'sign-guestbook') {
+        if (activeInteraction.expansionPlotId && expansionWorld) {
+          const ep = expansionWorld.plotById.get(activeInteraction.expansionPlotId) ?? null;
+          if (ep) {
+            setSelectedExpansionPlot(ep);
+            setSelectedPlot(null);
+            setInspectedVehicle(null);
+            setInspectedPark(null);
+            setOwnerSpotlightPlot(null);
+          }
         }
         return;
       }
@@ -1467,6 +1576,180 @@ export default function App() {
     setBirdAudioEnabled(next);
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // Resident Daily Check-In, LDF Coin Upgrades, Greeting Bio & House Guestbook
+  // ---------------------------------------------------------------------------
+
+  const handleLinkPlot = useCallback(
+    async (plot: ExpansionPlotSpec) => {
+      if (!currentUserUid) {
+        setCheckInNotice('Please sign in with Google first to link your plot.');
+        return;
+      }
+      setCheckInBusy(true);
+      setCheckInNotice(null);
+      try {
+        const nextWallet = await linkPlotToResidentWallet({
+          uid: currentUserUid,
+          plotId: plot.plotId,
+          plotCode: plot.plotCode,
+          username: plot.resident?.username ?? currentUserName,
+          currentWallet: wallet,
+        });
+        setWallet(nextWallet);
+        setCheckInNotice(`Linked ${plot.plotCode} (@${plot.resident?.username ?? currentUserName}) to your wallet.`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Could not link plot.';
+        setCheckInNotice(
+          msg.toLowerCase().includes('permission')
+            ? 'Firestore permission denied — deploy updated firestore.rules to persist resident wallets.'
+            : msg,
+        );
+      } finally {
+        setCheckInBusy(false);
+      }
+    },
+    [currentUserUid, currentUserName, wallet],
+  );
+
+  const handleDailyCheckIn = useCallback(
+    async (plot: ExpansionPlotSpec) => {
+      if (!currentUserUid) {
+        setCheckInNotice('Please sign in with Google to check in.');
+        return;
+      }
+      setCheckInBusy(true);
+      setCheckInNotice(null);
+      try {
+        const res = await performDailyPlotCheckIn({
+          uid: currentUserUid,
+          plotId: plot.plotId,
+          plotCode: plot.plotCode,
+          username: plot.resident?.username ?? currentUserName,
+          currentWallet: wallet,
+          currentCustomization: plotCustomizations[plot.plotId] ?? null,
+        });
+        setWallet(res.wallet);
+        setPlotCustomizations((prev) => ({ ...prev, [plot.plotId]: res.customization }));
+        setCheckInNotice(
+          `Checked in at ${plot.plotCode}! Earned +${res.reward} LDF Coins (${res.wallet.streakDays}d streak).`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Check-in failed.';
+        setCheckInNotice(
+          msg.toLowerCase().includes('permission')
+            ? 'Firestore permission denied — deploy updated firestore.rules to save daily check-ins.'
+            : msg,
+        );
+      } finally {
+        setCheckInBusy(false);
+      }
+    },
+    [currentUserUid, currentUserName, wallet, plotCustomizations],
+  );
+
+  const handlePurchasePlotUpgrade = useCallback(
+    async (plot: ExpansionPlotSpec, upgradeId: PlotUpgradeId, cost: number) => {
+      if (!currentUserUid || !wallet) {
+        setCheckInNotice('Sign in and check in first to earn LDF Coins.');
+        return;
+      }
+      setCheckInBusy(true);
+      setCheckInNotice(null);
+      try {
+        const res = await purchasePlotUpgradeInFirestore({
+          uid: currentUserUid,
+          plotId: plot.plotId,
+          username: plot.resident?.username ?? currentUserName,
+          upgradeId,
+          cost,
+          currentWallet: wallet,
+          currentCustomization: plotCustomizations[plot.plotId] ?? null,
+        });
+        setWallet(res.wallet);
+        setPlotCustomizations((prev) => ({ ...prev, [plot.plotId]: res.customization }));
+        setCheckInNotice(`Installed upgrade on ${plot.plotCode}! View it live in 3D.`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Upgrade purchase failed.';
+        setCheckInNotice(
+          msg.toLowerCase().includes('permission')
+            ? 'Firestore permission denied — deploy updated firestore.rules to save upgrades.'
+            : msg,
+        );
+      } finally {
+        setCheckInBusy(false);
+      }
+    },
+    [currentUserUid, currentUserName, wallet, plotCustomizations],
+  );
+
+  const handleSavePlotBio = useCallback(
+    async (plot: ExpansionPlotSpec, bio: string) => {
+      if (!currentUserUid) return;
+      setCheckInBusy(true);
+      setCheckInNotice(null);
+      try {
+        const nextCust = await savePlotBioInFirestore({
+          uid: currentUserUid,
+          plotId: plot.plotId,
+          username: plot.resident?.username ?? currentUserName,
+          bio,
+          currentCustomization: plotCustomizations[plot.plotId] ?? null,
+        });
+        setPlotCustomizations((prev) => ({ ...prev, [plot.plotId]: nextCust }));
+        setCheckInNotice(`Updated greeting card for ${plot.plotCode}.`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Could not save greeting.';
+        setCheckInNotice(
+          msg.toLowerCase().includes('permission')
+            ? 'Firestore permission denied — deploy updated firestore.rules to save bio.'
+            : msg,
+        );
+      } finally {
+        setCheckInBusy(false);
+      }
+    },
+    [currentUserUid, currentUserName, plotCustomizations],
+  );
+
+  const handleAddGuestbookEntry = useCallback(
+    async (plotId: string, message: string) => {
+      if (!currentUserUid) {
+        setAuthError('Sign in with Google to leave a guestbook note.');
+        return;
+      }
+      try {
+        const created = await addPlotGuestbookEntryInFirestore({
+          plotId,
+          authorUid: currentUserUid,
+          authorName: currentUserName,
+          message,
+        });
+        setGuestbookEntries((prev) =>
+          prev.some((e) => e.entryId === created.entryId) ? prev : [created, ...prev],
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Could not post guestbook note.';
+        setAuthError(
+          msg.toLowerCase().includes('permission')
+            ? 'Guestbook write denied — deploy updated firestore.rules.'
+            : msg,
+        );
+      }
+    },
+    [currentUserUid, currentUserName],
+  );
+
+  const handleDeleteGuestbookEntry = useCallback(async (entryId: string) => {
+    try {
+      await deletePlotGuestbookEntryInFirestore(entryId);
+      setGuestbookEntries((prev) => prev.filter((e) => e.entryId !== entryId));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not delete note.';
+      setAuthError(msg);
+    }
+  }, []);
+
   if (contextLost) {
     return (
       <div className="w-screen h-screen bg-[#11161d] text-slate-100 flex flex-col items-center justify-center p-6 text-center">
@@ -1509,6 +1792,7 @@ export default function App() {
           playerProfile={playerProfile}
           sittingBenchId={sittingBenchId}
           openDoors={openDoors}
+          plotCustomizations={plotCustomizations}
           playerPoseRef={playerPoseRef}
           mobileInputRef={mobileInputRef}
           vehicleStatesRef={vehicleStatesRef}
@@ -1637,6 +1921,26 @@ export default function App() {
         onRegenerateBlock={handleRegenerateBlock}
         onExpandCityBlock={handleExpandCityBlock}
         onResetMasterPlan={handleResetMasterPlan}
+        wallet={wallet}
+        plotCustomizations={plotCustomizations}
+        guestbookEntries={guestbookEntries}
+        checkInModalOpen={checkInModalOpen}
+        districtDrawerOpen={districtDrawerOpen}
+        checkInBusy={checkInBusy}
+        checkInNotice={checkInNotice}
+        onToggleCheckInModal={(next) =>
+          setCheckInModalOpen((prev) => (typeof next === 'boolean' ? next : !prev))
+        }
+        onToggleDistrictDrawer={(next) =>
+          setDistrictDrawerOpen((prev) => (typeof next === 'boolean' ? next : !prev))
+        }
+        onClearCheckInNotice={() => setCheckInNotice(null)}
+        onLinkPlot={handleLinkPlot}
+        onDailyCheckIn={handleDailyCheckIn}
+        onPurchasePlotUpgrade={handlePurchasePlotUpgrade}
+        onSavePlotBio={handleSavePlotBio}
+        onAddGuestbookEntry={handleAddGuestbookEntry}
+        onDeleteGuestbookEntry={handleDeleteGuestbookEntry}
       />
     </main>
   );

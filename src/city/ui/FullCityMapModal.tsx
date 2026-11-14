@@ -423,6 +423,46 @@ export const FullCityMapModal: React.FC<FullCityMapModalProps> = ({
         ctx.stroke();
       }
 
+      // Smooth Curved District Roads & Collectors
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const cr of expansionWorld.curvedRoads) {
+        const pts = cr.sampledPoints;
+        if (pts.length < 2) continue;
+        ctx.strokeStyle = cr.tier === 'collector' || cr.tier === 'scenic-curve' ? '#475569' : '#334155';
+        ctx.lineWidth = Math.max(1.1, cr.width * view.scale);
+        ctx.beginPath();
+        const pStart = toPx(pts[0].x, pts[0].z);
+        ctx.moveTo(pStart.x, pStart.y);
+        for (let i = 1; i < pts.length; i++) {
+          const pt = toPx(pts[i].x, pts[i].z);
+          ctx.lineTo(pt.x, pt.y);
+        }
+        ctx.stroke();
+
+        if (cr.hasDoubleCenterLine && view.scale >= 0.7) {
+          ctx.strokeStyle = 'rgba(250,204,21,0.45)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+
+      // Neighborhood Roundabouts
+      for (const rb of expansionWorld.roundabouts) {
+        const cp = toPx(rb.x, rb.z);
+        if (cp.x < -60 || cp.x > w + 60 || cp.y < -60 || cp.y > h + 60) continue;
+        const outerR = Math.max(3, (rb.innerRadius + rb.roadWidth) * view.scale);
+        const innerR = Math.max(1.4, rb.innerRadius * view.scale);
+        ctx.fillStyle = '#475569';
+        ctx.beginPath();
+        ctx.arc(cp.x, cp.y, outerR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = rb.hasFountain ? '#38bdf8' : '#16a34a';
+        ctx.beginPath();
+        ctx.arc(cp.x, cp.y, innerR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       for (const ep of expansionWorld.plots) {
         if (tierFilter === 'og' && ep.status !== 'vip' && ep.status !== 'og') continue;
         if (tierFilter === 'occupied' && ep.status === 'expansion-open') continue;
@@ -430,8 +470,8 @@ export const FullCityMapModal: React.FC<FullCityMapModalProps> = ({
 
         const p = toPx(ep.x, ep.z);
         if (p.x < -30 || p.x > w + 30 || p.y < -30 || p.y > h + 30) continue;
-        const pw = Math.max(2.6, (ep.width - 1.4) * view.scale);
-        const pd = Math.max(2.6, (ep.depth - 1.4) * view.scale);
+        const pw = Math.max(2.6, (ep.width - 1.2) * view.scale);
+        const pd = Math.max(2.6, (ep.depth - 1.2) * view.scale);
 
         ctx.fillStyle =
           ep.status === 'vip'
@@ -441,7 +481,16 @@ export const FullCityMapModal: React.FC<FullCityMapModalProps> = ({
               : ep.status === 'occupied'
                 ? '#2dd4bf'
                 : '#4d7c0f';
-        ctx.fillRect(p.x - pw / 2, p.y - pd / 2, pw, pd);
+
+        if (Math.abs(ep.facingAngle) > 0.02 && view.scale >= 0.35) {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(-ep.facingAngle);
+          ctx.fillRect(-pw / 2, -pd / 2, pw, pd);
+          ctx.restore();
+        } else {
+          ctx.fillRect(p.x - pw / 2, p.y - pd / 2, pw, pd);
+        }
       }
     }
 

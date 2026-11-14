@@ -6,7 +6,55 @@ import {
   STREET_LAMPS,
   TOWN_BENCHES,
 } from '../world/MasterTownBlueprint';
-import { ExpansionCityWorld, queryNearbyExpansionPlots } from '../expansion/ExpansionMasterPlan';
+import {
+  ExpansionCityWorld,
+  getExpansionHouseMetrics,
+  queryNearbyExpansionPlots,
+} from '../expansion/ExpansionMasterPlan';
+import { CurvedRoadSplineSpec } from '../expansion/types';
+
+interface CurvedRoadBBox {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+const curvedRoadBBoxCache = new WeakMap<CurvedRoadSplineSpec[], CurvedRoadBBox[]>();
+
+function getCurvedRoadBBoxes(curvedRoads: CurvedRoadSplineSpec[]): CurvedRoadBBox[] {
+  let cached = curvedRoadBBoxCache.get(curvedRoads);
+  if (cached) return cached;
+  cached = curvedRoads.map((cr) => {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const pt of cr.sampledPoints) {
+      if (pt.x < minX) minX = pt.x;
+      if (pt.x > maxX) maxX = pt.x;
+      if (pt.z < minZ) minZ = pt.z;
+      if (pt.z > maxZ) maxZ = pt.z;
+    }
+    const pad = cr.width * 0.5 + cr.greenStripWidth + cr.sidewalkWidth + 1.0;
+    return { minX: minX - pad, maxX: maxX + pad, minZ: minZ - pad, maxZ: maxZ + pad };
+  });
+  curvedRoadBBoxCache.set(curvedRoads, cached);
+  return cached;
+}
+
+function distancePointToSegment2D(
+  px: number,
+  pz: number,
+  x1: number,
+  z1: number,
+  x2: number,
+  z2: number,
+): number {
+  const dx = x2 - x1;
+  const dz = z2 - z1;
+  const lenSq = dx * dx + dz * dz;
+  if (lenSq <= 1e-8) return Math.hypot(px - x1, pz - z1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (pz - z1) * dz) / lenSq));
+  return Math.hypot(px - (x1 + t * dx), pz - (z1 + t * dz));
+}
 
 export interface DynamicVehicleObstacle {
   id: string;
@@ -122,12 +170,7 @@ function isOnBridge(
   return { onBridge: false, elevation: 0 };
 }
 
-function isInsideExpansionGridArea(x: number, z: number): boolean {
-  if (x < -1045 || x > 1045 || z < -765 || z > 765) return false;
-  // Core Lindenhof is handled by core elevation logic
-  if (x >= -138 && x <= 138 && z >= -128 && z <= 128) return false;
-  return true;
-}
+
 
 /**
  * Returns exact walking ground elevation (roads, sidewalks, square/park, footbridges,
@@ -254,23 +297,91 @@ export function getSurfaceElevationAt(
       return SIDEWALK_HEIGHT;
     }
 
-    // 6 Unique District Parks
+    // 7 Unique District Parks
     for (const pk of expansionWorld.districtParks) {
       if (Math.abs(x - pk.x) <= pk.width / 2 && Math.abs(z - pk.z) <= pk.depth / 2) {
         return SIDEWALK_HEIGHT + 0.02;
       }
     }
 
-    // Master Suburban Grid Roads (x = col*140 - 70, z = row*44 - 22)
-    if (isInsideExpansionGridArea(x, z)) {
-      const modX = Math.abs((((x + 70) % 140) + 140) % 140 - 70);
-      const distGridX = 70 - modX;
-      const modZ = Math.abs((((z + 22) % 44) + 44) % 44 - 22);
-      const distGridZ = 22 - modZ;
-      if (distGridX < 4.7 || distGridZ < 4.5) {
+    // Neighborhood Roundabouts (green island, asphalt ring, outer sidewalk)
+    for (const rb of expansionWorld.roundabouts) {
+      const dist = Math.hypot(x - rb.x, z - rb.z);
+      if (dist <= rb.innerRadius + 0.05) {
+        return SIDEWALK_HEIGHT + 0.03;
+      }
+      if (dist <= rb.innerRadius + rb.roadWidth) {
         return ROAD_SURFACE_Y;
       }
-      return SIDEWALK_HEIGHT;
+      if (dist <= rb.innerRadius + rb.roadWidth + rb.sidewalkWidth) {
+        return SIDEWALK_HEIGHT - 0.015;
+      }
+    }
+
+    // Curved District Streets, Green Strips, and Raised Sidewalks
+    const crBBoxes = getCurvedRoadBBoxes(expansionWorld.curvedRoads);
+    for (let rIdx = 0; rIdx < expansionWorld.curvedRoads.length; rIdx++) {
+      const bb = crBBoxes[rIdx];
+      if (x < bb.minX || x > bb.maxX || z < bb.minZ || z > bb.maxZ) continue;
+      const cr = expansionWorld.curvedRoads[rIdx];
+      const pts = cr.sampledPoints;
+      const halfW = cr.width * 0.5;
+      const greenOuter = halfW + cr.greenStripWidth;
+      const swOuter = greenOuter + cr.sidewalkWidth;
+      let minDist = Infinity;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[i];
+        const p1 = pts[i + 1];
+        if (
+          x < Math.min(p0.x, p1.x) - swOuter ||
+          x > Math.max(p0.x, p1.x) + swOuter ||
+          z < Math.min(p0.z, p1.z) - swOuter ||
+          z > Math.max(p0.z, p1.z) + swOuter
+        ) {
+          continue;
+        }
+        const d = distancePointToSegment2D(x, z, p0.x, p0.z, p1.x, p1.z);
+        if (d < minDist) minDist = d;
+      }
+      if (minDist <= halfW) {
+        return ROAD_SURFACE_Y;
+      }
+      if (minDist <= greenOuter) {
+        return SIDEWALK_HEIGHT - 0.026;
+      }
+      if (minDist <= swOuter) {
+        return SIDEWALK_HEIGHT - 0.015;
+      }
+    }
+
+    // Straight collector & boulevard road segments
+    for (const r of expansionWorld.roads) {
+      const halfW = r.width * 0.5;
+      if (
+        x < Math.min(r.x1, r.x2) - halfW ||
+        x > Math.max(r.x1, r.x2) + halfW ||
+        z < Math.min(r.z1, r.z2) - halfW ||
+        z > Math.max(r.z1, r.z2) + halfW
+      ) {
+        continue;
+      }
+      if (distancePointToSegment2D(x, z, r.x1, r.z1, r.x2, r.z2) <= halfW) {
+        return ROAD_SURFACE_Y;
+      }
+    }
+
+    // Nearby residential/OG plot pads
+    const nearbyPads = queryNearbyExpansionPlots(expansionWorld.spatialIndex, x, z, 20);
+    for (const ep of nearbyPads) {
+      const sin = Math.sin(ep.facingAngle);
+      const cos = Math.cos(ep.facingAngle);
+      const dx = x - ep.x;
+      const dz = z - ep.z;
+      const lx = dx * cos - dz * sin;
+      const lz = dx * sin + dz * cos;
+      if (Math.abs(lx) <= ep.width * 0.5 && Math.abs(lz) <= ep.depth * 0.5) {
+        return SIDEWALK_HEIGHT;
+      }
     }
   }
 
@@ -733,6 +844,16 @@ export function resolvePlayerMovement(
         }
       }
 
+      // Roundabout Central Islands & Fountains
+      for (const rb of expansionWorld.roundabouts) {
+        if (Math.abs(x - rb.x) < rb.innerRadius + 2 && Math.abs(z - rb.z) < rb.innerRadius + 2) {
+          const islandR = rb.hasFountain ? 2.6 : 1.4;
+          const res = pushOutCircle(x, z, playerRadius, { cx: rb.x, cz: rb.z, r: islandR });
+          x = res.x;
+          z = res.z;
+        }
+      }
+
       // Expansion Plots within 36m
       const nearbyExp = queryNearbyExpansionPlots(expansionWorld.spatialIndex, x, z, 36);
       for (const ep of nearbyExp) {
@@ -796,8 +917,10 @@ export function resolvePlayerMovement(
             cx: ep.x + lx * cos + lz * sin,
             cz: ep.z - lx * sin + lz * cos,
           });
+          const m = getExpansionHouseMetrics(ep);
 
-          const hPos = toWorld(0, -1.1);
+          // Main House Body
+          const hPos = toWorld(m.houseLocalX, m.houseLocalZ);
           let res = pushOutOrientedBox(x, z, playerRadius, {
             cx: hPos.cx,
             cz: hPos.cz,
@@ -806,22 +929,69 @@ export function resolvePlayerMovement(
             rotY: -ep.facingAngle,
           });
 
-          // Individual Perimeter Fence Segments (front entrance gate stays cleanly walkable)
-          const isOg = ep.status === 'og';
-          const inset = isOg ? 0.34 : 0.2;
+          // Attached Garage Wing
+          if (m.hasGarage) {
+            const gPos = toWorld(m.drivewayX, m.houseLocalZ - 0.15);
+            res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+              cx: gPos.cx,
+              cz: gPos.cz,
+              hx: 1.4,
+              hz: 2.18,
+              rotY: -ep.facingAngle,
+            });
+          }
+
+          // Parked Driveway Vehicle
+          if (ep.hasParkedCar) {
+            const cPos = toWorld(m.drivewayX, ep.depth / 2 - 2.35);
+            res = pushOutOrientedBox(res.x, res.z, playerRadius, {
+              cx: cPos.cx,
+              cz: cPos.cz,
+              hx: 0.85,
+              hz: 1.72,
+              rotY: -ep.facingAngle,
+            });
+          }
+
+          // Perimeter Fence Segments (keeping BOTH walkway gate and driveway opening walkable!)
+          const inset = m.isOg ? 0.34 : 0.2;
           const fw = ep.width / 2 - inset;
           const fd = ep.depth / 2 - inset;
-          const gateHalf = isOg ? 1.85 : 1.4;
-          const frontWingLen = Math.max(0.2, fw - gateHalf);
-          const frontWingMid = (fw + gateHalf) / 2;
+          const gateHalf = m.isOg ? 1.85 : 1.1;
+          const pillarOffset = 0.12;
+          const openings: Array<{ start: number; end: number }> = [
+            { start: m.walkwayX - gateHalf, end: m.walkwayX + gateHalf },
+          ];
+          if (m.hasGarage) {
+            const dHalf = m.isOg ? 1.7 : 1.4;
+            const dStart = m.drivewayX - dHalf;
+            const dEnd = m.drivewayX + dHalf;
+            if (dStart > openings[0].end + 0.2) {
+              openings.push({ start: dStart, end: dEnd });
+            } else {
+              openings[0].end = Math.max(openings[0].end, dEnd);
+            }
+          }
+          openings.sort((a, b) => a.start - b.start);
 
-          for (const [lx, lz, hx, hz] of [
+          const fenceBoxes: Array<[number, number, number, number]> = [
             [-fw, 0, 0.13, fd],
             [fw, 0, 0.13, fd],
             [0, -fd, fw, 0.13],
-            [-frontWingMid, fd, frontWingLen / 2, 0.13],
-            [frontWingMid, fd, frontWingLen / 2, 0.13],
-          ]) {
+          ];
+          let cursorX = -fw;
+          for (const op of openings) {
+            const segEnd = Math.min(fw, op.start - pillarOffset);
+            if (segEnd - cursorX > 0.25) {
+              fenceBoxes.push([(cursorX + segEnd) / 2, fd, (segEnd - cursorX) / 2, 0.13]);
+            }
+            cursorX = Math.max(cursorX, op.end + pillarOffset);
+          }
+          if (fw - cursorX > 0.25) {
+            fenceBoxes.push([(cursorX + fw) / 2, fd, (fw - cursorX) / 2, 0.13]);
+          }
+
+          for (const [lx, lz, hx, hz] of fenceBoxes) {
             const w = toWorld(lx, lz);
             res = pushOutOrientedBox(res.x, res.z, playerRadius, {
               cx: w.cx,

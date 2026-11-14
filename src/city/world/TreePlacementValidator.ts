@@ -7,8 +7,39 @@ import {
   STREET_LAMPS,
   TOWN_BENCHES,
 } from './MasterTownBlueprint';
-import { ExpansionCityWorld, queryNearbyExpansionPlots } from '../expansion/ExpansionMasterPlan';
-import { ExpansionPlotSpec } from '../expansion/types';
+import {
+  ExpansionCityWorld,
+  getExpansionHouseMetrics,
+  queryNearbyExpansionPlots,
+} from '../expansion/ExpansionMasterPlan';
+import { CurvedRoadSplineSpec, ExpansionPlotSpec } from '../expansion/types';
+
+interface CurvedRoadBBox {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+const curvedRoadBBoxCache = new WeakMap<CurvedRoadSplineSpec[], CurvedRoadBBox[]>();
+
+function getCurvedRoadBBoxes(curvedRoads: CurvedRoadSplineSpec[]): CurvedRoadBBox[] {
+  let cached = curvedRoadBBoxCache.get(curvedRoads);
+  if (cached) return cached;
+  cached = curvedRoads.map((cr) => {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const pt of cr.sampledPoints) {
+      if (pt.x < minX) minX = pt.x;
+      if (pt.x > maxX) maxX = pt.x;
+      if (pt.z < minZ) minZ = pt.z;
+      if (pt.z > maxZ) maxZ = pt.z;
+    }
+    const pad = cr.width * 0.5 + cr.greenStripWidth + cr.sidewalkWidth + 3.0;
+    return { minX: minX - pad, maxX: maxX + pad, minZ: minZ - pad, maxZ: maxZ + pad };
+  });
+  curvedRoadBBoxCache.set(curvedRoads, cached);
+  return cached;
+}
 
 export function distancePointToSegment2D(
   px: number,
@@ -292,18 +323,44 @@ export function isClearOfExpansionInfra(
     if (d <= margin) return false;
   }
 
+  // Roundabouts & central islands
+  for (const rb of world.roundabouts) {
+    if (Math.hypot(x - rb.x, z - rb.z) <= rb.innerRadius + rb.roadWidth + rb.sidewalkWidth + 1.5) {
+      return false;
+    }
+  }
+
+  // Smooth Curved District Roads, Green Strips, and Raised Sidewalks
+  const crBBoxes = getCurvedRoadBBoxes(world.curvedRoads);
+  for (let rIdx = 0; rIdx < world.curvedRoads.length; rIdx++) {
+    const bb = crBBoxes[rIdx];
+    if (x < bb.minX || x > bb.maxX || z < bb.minZ || z > bb.maxZ) continue;
+    const cr = world.curvedRoads[rIdx];
+    const pts = cr.sampledPoints;
+    const clearDist = Math.max(
+      cr.width * 0.5 + roadEdgeClearance,
+      cr.width * 0.5 + cr.greenStripWidth + cr.sidewalkWidth + 0.6,
+    );
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i];
+      const p1 = pts[i + 1];
+      if (
+        x < Math.min(p0.x, p1.x) - clearDist ||
+        x > Math.max(p0.x, p1.x) + clearDist ||
+        z < Math.min(p0.z, p1.z) - clearDist ||
+        z > Math.max(p0.z, p1.z) + clearDist
+      ) {
+        continue;
+      }
+      if (distancePointToSegment2D(x, z, p0.x, p0.z, p1.x, p1.z) <= clearDist) {
+        return false;
+      }
+    }
+  }
+
   // Outer Panoramic Elliptical Ring Road safety corridor (rx = 1175, rz = 890, halfW = 5.7)
   const ellipNorm = Math.hypot(x / 1175, z / 890);
   if (Math.abs(ellipNorm - 1.0) <= 0.011) return false;
-
-  // Suburban grid intersections sightline protection (cols at -70 + 140*k, rows at -22 + 44*m)
-  if (Math.abs(x) <= 1060 && Math.abs(z) <= 780) {
-    const modX = Math.abs((((x + 70) % 140) + 140) % 140 - 70);
-    const distGridX = 70 - modX;
-    const modZ = Math.abs((((z + 22) % 44) + 44) % 44 - 22);
-    const distGridZ = 22 - modZ;
-    if (distGridX < 8.4 && distGridZ < 8.4) return false;
-  }
 
   // Bus stops, lamps, benches
   for (const bs of world.busStops) {
@@ -316,10 +373,16 @@ export function isClearOfExpansionInfra(
     if (Math.hypot(x - bench.x, z - bench.z) < 2.2) return false;
   }
 
-  // Nearby residential/OG plots (including VIP palace)
+  // Nearby residential/OG plots (including VIP palace) using exact rotated OBB coordinates
   const nearby = queryNearbyExpansionPlots(world.spatialIndex, x, z, 32);
   for (const p of nearby) {
-    if (Math.abs(x - p.x) < p.width * 0.5 + 2.0 && Math.abs(z - p.z) < p.depth * 0.5 + 2.0) {
+    const sin = Math.sin(p.facingAngle);
+    const cos = Math.cos(p.facingAngle);
+    const dx = x - p.x;
+    const dz = z - p.z;
+    const lx = dx * cos - dz * sin;
+    const lz = dx * sin + dz * cos;
+    if (Math.abs(lx) < p.width * 0.5 + 2.0 && Math.abs(lz) < p.depth * 0.5 + 2.0) {
       return false;
     }
   }
@@ -328,7 +391,8 @@ export function isClearOfExpansionInfra(
 }
 
 /**
- * Validates that an expansion plot's internal garden tree never overlaps its house, pool, or front walkway.
+ * Validates that an expansion plot's internal garden tree never overlaps its house,
+ * attached garage, driveway, front walkway, mailbox, or rear pool.
  */
 export function isExpansionPlotTreeSafe(
   plot: ExpansionPlotSpec,
@@ -337,23 +401,39 @@ export function isExpansionPlotTreeSafe(
 ): boolean {
   const halfW = plot.width * 0.5;
   const halfD = plot.depth * 0.5;
-  if (Math.abs(localX) > halfW - 1.2 || Math.abs(localZ) > halfD - 1.2) {
+  if (Math.abs(localX) > halfW - 1.15 || Math.abs(localZ) > halfD - 1.15) {
     return false;
   }
 
-  // Front entrance walkway (center x=0, z >= 0.5)
-  if (Math.abs(localX) < 1.8 && localZ > -0.5) {
+  const m = getExpansionHouseMetrics(plot);
+
+  // Front entrance walkway & mailbox zone
+  if (Math.abs(localX - m.walkwayX) <= 1.55 && localZ >= m.houseLocalZ) {
+    return false;
+  }
+  if (Math.hypot(localX - (m.walkwayX - 1.4), localZ - (halfD - 0.55)) <= 1.1) {
     return false;
   }
 
   if (plot.houseStyle) {
-    const hw = plot.houseStyle.width * 0.5 + 1.1;
-    const hd = plot.houseStyle.depth * 0.5 + 1.1;
-    if (Math.abs(localX) <= hw && Math.abs(localZ + 1.1) <= hd) {
+    const hw = plot.houseStyle.width * 0.5 + 0.85;
+    const hd = plot.houseStyle.depth * 0.5 + 0.85;
+    if (Math.abs(localX - m.houseLocalX) <= hw && Math.abs(localZ - m.houseLocalZ) <= hd) {
       return false;
     }
+
+    if (m.hasGarage) {
+      // Attached garage wing + driveway apron
+      if (
+        Math.abs(localX - m.drivewayX) <= 2.1 &&
+        localZ >= m.houseLocalZ - 2.9 &&
+        localZ <= halfD
+      ) {
+        return false;
+      }
+    }
+
     if (plot.houseStyle.hasPool) {
-      // Pool occupies rear center-right area in OG/occupied expansion plots
       if (Math.abs(localX) <= 3.5 && localZ <= -halfD + 4.4) {
         return false;
       }

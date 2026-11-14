@@ -339,6 +339,48 @@ export const CityCameraController: React.FC<CityCameraControllerProps> = ({
           54,
           THREE.MathUtils.lerp(82, 95, mix),
         );
+      } else if (cinematicTour === 'central-gardens-orbit') {
+        const a = t * 0.18;
+        _desiredLook.set(160, 4.0, 332);
+        _desiredPos.set(160 + Math.cos(a) * 92, 39 + Math.sin(t * 0.35) * 6, 332 + Math.sin(a) * 92);
+      } else if (cinematicTour === 'lakeside-sunset-cruise') {
+        const s = (Math.sin(t * 0.11) + 1) * 0.5;
+        const lookX = THREE.MathUtils.lerp(610, 795, s);
+        const lookZ = THREE.MathUtils.lerp(-220, 210, s) + Math.sin(s * Math.PI * 2) * 38;
+        _desiredLook.set(lookX, 4.5, lookZ);
+        _desiredPos.set(
+          lookX + 115 * Math.cos(s * Math.PI * 0.6),
+          46 + Math.sin(t * 0.28) * 7,
+          lookZ + 95,
+        );
+      } else if (cinematicTour === 'grand-7-district-tour') {
+        // Smooth cyclical loop across Oakwood -> Highland -> Lakeside -> Greenfield -> Central Gardens -> Maplewood -> Riverside
+        const waypointsX = [-580, 185, 790, 520, 160, -580, -735];
+        const waypointsZ = [-450, -560, -140, 580, 340, 500, 0];
+        const count = waypointsX.length;
+        const progress = ((t * 0.095) % count + count) % count;
+        const idx0 = Math.floor(progress);
+        const idx1 = (idx0 + 1) % count;
+        const idxPrev = (idx0 + count - 1) % count;
+        const idx2 = (idx1 + 1) % count;
+        const u = progress - idx0;
+        const u2 = u * u;
+        const u3 = u2 * u;
+        const catmull = (p0: number, p1: number, p2: number, p3: number) =>
+          0.5 *
+          (2 * p1 +
+            (-p0 + p2) * u +
+            (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 +
+            (-p0 + 3 * p1 - 3 * p2 + p3) * u3);
+        const lx = catmull(waypointsX[idxPrev], waypointsX[idx0], waypointsX[idx1], waypointsX[idx2]);
+        const lz = catmull(waypointsZ[idxPrev], waypointsZ[idx0], waypointsZ[idx1], waypointsZ[idx2]);
+        const orbitAngle = t * 0.14;
+        _desiredLook.set(lx, 5.0, lz);
+        _desiredPos.set(
+          lx + Math.sin(orbitAngle) * 145,
+          72 + Math.sin(t * 0.25) * 14,
+          lz + Math.cos(orbitAngle) * 145,
+        );
       } else {
         // full-town-loop
         const a = t * 0.09;

@@ -71,7 +71,11 @@ export const HouseModel: React.FC<HouseModelProps> = ({
     wallHeight,
   } = spec;
 
-  const isFlatModern = archetype === 'modern-villa' || archetype === 'luxury-modern';
+  const isFlatModern =
+    archetype === 'modern-villa' ||
+    archetype === 'luxury-modern' ||
+    archetype === 'contemporary-villa' ||
+    archetype === 'modern-minimalist';
   const isEvening = timeOfDay === 'sunset' || timeOfDay === 'night';
   const windowEmissive = isEvening ? '#ffbe6b' : '#2a3744';
   const windowEmissiveIntensity = isEvening ? 1.45 : 0.06;
@@ -108,26 +112,33 @@ export const HouseModel: React.FC<HouseModelProps> = ({
   }, [houseNumTexture]);
 
   const wallMap = useMemo(() => {
-    if (archetype === 'townhouse') return textures.brick;
-    if (archetype === 'nordic') return textures.timber;
+    if (archetype === 'townhouse' || archetype === 'traditional-home') return textures.brick;
+    if (archetype === 'nordic' || archetype === 'modern-family') return textures.timber;
     return textures.plaster;
   }, [archetype, textures]);
 
   const roofMap = useMemo(() => {
-    if (archetype === 'tudor' || archetype === 'mediterranean') return textures.roofTile;
+    if (archetype === 'tudor' || archetype === 'mediterranean' || archetype === 'traditional-home') {
+      return textures.roofTile;
+    }
     return textures.slateRoof;
   }, [archetype, textures]);
 
   // Gable wall triangle (matches facade wall material)
   const gableWallGeo = useMemo(() => {
     const ridgeHeight =
-      archetype === 'tudor' || archetype === 'townhouse' || archetype === 'luxury-mansion'
-        ? 2.85
-        : archetype === 'nordic'
-          ? 1.9
+      archetype === 'tudor' ||
+      archetype === 'townhouse' ||
+      archetype === 'luxury-mansion' ||
+      archetype === 'premium-residence'
+        ? 2.75
+        : archetype === 'nordic' || archetype === 'modern-family'
+          ? 1.75
           : archetype === 'mediterranean'
             ? 1.65
-            : 2.35;
+            : archetype === 'traditional-home' || archetype === 'suburban-two-storey'
+              ? 2.45
+              : 2.35;
 
     const halfW = width / 2;
     const shape = new THREE.Shape();
@@ -402,8 +413,8 @@ export const HouseModel: React.FC<HouseModelProps> = ({
         </group>
       )}
 
-      {/* 5. Bavarian Half-Timber Beams (Tudor) */}
-      {archetype === 'tudor' && (
+      {/* 5. Bavarian Half-Timber & Craftsman Framing */}
+      {(archetype === 'tudor' || archetype === 'premium-residence') && (
         <group>
           {[-width / 2 + 0.1, -width * 0.2, width * 0.2, width / 2 - 0.1].map((tx, idx) => (
             <mesh key={`v-${idx}`} position={[tx, wallHeight * 0.52, frontZ + 0.03]} castShadow>
@@ -424,6 +435,18 @@ export const HouseModel: React.FC<HouseModelProps> = ({
             <boxGeometry args={[0.18, 2.2, 0.08]} />
             <meshStandardMaterial color={trimColor} roughness={0.85} />
           </mesh>
+        </group>
+      )}
+
+      {/* Minimalist & Contemporary Vertical Cedar Privacy Louvers */}
+      {(archetype === 'modern-minimalist' || archetype === 'contemporary-villa') && (
+        <group position={[-width * 0.36, plinthH + bodyH * 0.5, frontZ + 0.06]}>
+          {[-0.24, -0.08, 0.08, 0.24].map((lx, idx) => (
+            <mesh key={`louv-${idx}`} position={[lx, 0, 0]} castShadow>
+              <boxGeometry args={[0.07, bodyH * 0.92, 0.1]} />
+              <meshStandardMaterial color={accentColor} roughness={0.72} />
+            </mesh>
+          ))}
         </group>
       )}
 
@@ -566,11 +589,19 @@ export const HouseModel: React.FC<HouseModelProps> = ({
             height={1.45}
             frameColor={trimColor}
             shutterColor={shutterColor}
-            hasShutters={archetype === 'cottage' || archetype === 'tudor' || archetype === 'mediterranean'}
+            hasShutters={
+              archetype === 'cottage' ||
+              archetype === 'tudor' ||
+              archetype === 'mediterranean' ||
+              archetype === 'traditional-home' ||
+              archetype === 'suburban-two-storey'
+            }
             emissive={windowEmissive}
             emissiveIntensity={windowEmissiveIntensity}
           />
-          {(archetype === 'cottage' || archetype === 'mediterranean') && (
+          {(archetype === 'cottage' ||
+            archetype === 'mediterranean' ||
+            archetype === 'traditional-home') && (
             <group position={[wx, plinthH + 0.62, frontZ + 0.15]}>
               <mesh castShadow>
                 <boxGeometry args={[1.15, 0.18, 0.22]} />
@@ -588,11 +619,15 @@ export const HouseModel: React.FC<HouseModelProps> = ({
           {/* Second floor window */}
           <WindowAssembly
             position={[wx, plinthH + bodyH * 0.72, frontZ + 0.03]}
-            width={archetype === 'modern-villa' ? 1.85 : 1.28}
-            height={archetype === 'modern-villa' ? 1.55 : 1.38}
+            width={isFlatModern ? 1.82 : 1.28}
+            height={isFlatModern ? 1.52 : 1.38}
             frameColor={trimColor}
             shutterColor={shutterColor}
-            hasShutters={archetype === 'cottage' || archetype === 'mediterranean'}
+            hasShutters={
+              archetype === 'cottage' ||
+              archetype === 'mediterranean' ||
+              archetype === 'traditional-home'
+            }
             emissive={windowEmissive}
             emissiveIntensity={windowEmissiveIntensity}
           />
@@ -671,7 +706,7 @@ export const HouseModel: React.FC<HouseModelProps> = ({
             <boxGeometry args={[0.07, 0.85, 1.24]} />
             <meshStandardMaterial color="#272b30" roughness={0.35} metalness={0.75} />
           </mesh>
-          {archetype === 'modern-villa' ? (
+          {isFlatModern ? (
             <mesh position={[0, 0.46, 0.58]}>
               <boxGeometry args={[3.04, 0.76, 0.04]} />
               <meshPhysicalMaterial

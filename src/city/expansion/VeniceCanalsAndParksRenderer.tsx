@@ -567,6 +567,58 @@ const DistrictParkMesh: React.FC<{ park: DistrictParkSpec; timeOfDay: TimeOfDay 
         </group>
       )}
 
+      {park.variant === 'garden-rotunda' && (
+        <group position={[0, SIDEWALK_HEIGHT + 0.06, 0]}>
+          {/* Classical Marble Rotunda + Central Fountain + Radial Flower Parterres */}
+          <mesh position={[0, 0.22, 0]} receiveShadow>
+            <cylinderGeometry args={[7.4, 7.9, 0.44, 24]} />
+            <meshStandardMaterial color="#dfd7c8" roughness={0.78} />
+          </mesh>
+          {[0, 1, 2, 3, 4, 5, 6, 7].map((ci) => {
+            const ang = (ci / 8) * Math.PI * 2;
+            return (
+              <mesh
+                key={`rot-col-${ci}`}
+                position={[Math.cos(ang) * 5.8, 2.25, Math.sin(ang) * 5.8]}
+                castShadow
+              >
+                <cylinderGeometry args={[0.19, 0.23, 3.8, 10]} />
+                <meshStandardMaterial color="#f5efe4" roughness={0.62} />
+              </mesh>
+            );
+          })}
+          <mesh position={[0, 4.3, 0]} castShadow>
+            <torusGeometry args={[5.8, 0.32, 8, 28]} />
+            <meshStandardMaterial color="#e7dfd0" roughness={0.65} />
+          </mesh>
+          <mesh position={[0, 5.15, 0]} castShadow>
+            <sphereGeometry args={[5.8, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.42]} />
+            <meshStandardMaterial color="#3b7a68" roughness={0.45} metalness={0.35} />
+          </mesh>
+          <GrandCommunityFountain position={[0, 0.44, 0]} scale={0.72} timeOfDay={timeOfDay} />
+          {[
+            [-20, -14],
+            [20, -14],
+            [-20, 14],
+            [20, 14],
+          ].map(([fx, fz], fi) => (
+            <group key={`rot-fl-${fi}`} position={[fx, 0.02, fz]}>
+              <mesh position={[0, 0.14, 0]} receiveShadow>
+                <cylinderGeometry args={[5.2, 5.5, 0.28, 16]} />
+                <meshStandardMaterial color="#3b6b38" roughness={0.9} />
+              </mesh>
+              <mesh position={[0, 0.3, 0]}>
+                <cylinderGeometry args={[3.9, 4.1, 0.16, 16]} />
+                <meshStandardMaterial
+                  color={fi % 2 === 0 ? '#f43f5e' : '#fbbf24'}
+                  roughness={0.78}
+                />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      )}
+
       {/* HD Wind-Swaying 3D Grass Tufts Across All District Park Lawns */}
       <InstancedGrassField tufts={parkGrass} />
 

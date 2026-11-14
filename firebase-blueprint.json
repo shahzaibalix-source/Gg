@@ -336,6 +336,171 @@
           "type": "boolean"
         }
       }
+    },
+    "ResidentWalletDoc": {
+      "title": "Resident Check-In Wallet",
+      "description": "Private owner-only town currency balance, daily check-in streak, and linked house plot.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "balance": {
+          "type": "integer"
+        },
+        "streakDays": {
+          "type": "integer"
+        },
+        "lastCheckInDay": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "totalCheckIns": {
+          "type": "integer"
+        },
+        "linkedPlotId": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "linkedPlotCode": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "linkedUsername": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "balance",
+        "streakDays",
+        "lastCheckInDay",
+        "totalCheckIns",
+        "linkedPlotId",
+        "linkedPlotCode",
+        "linkedUsername",
+        "updatedAt"
+      ]
+    },
+    "PlotCustomizationDoc": {
+      "title": "Plot Customization & Upgrades",
+      "description": "Publicly readable plot greeting bio, exterior upgrades (driveway lamps, flower planters, garden fountain, festive garland), and check-in tally.",
+      "type": "object",
+      "properties": {
+        "plotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "ownerUsername": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "bio": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "hasDrivewayLights": {
+          "type": "boolean"
+        },
+        "hasFlowerPlanters": {
+          "type": "boolean"
+        },
+        "hasGardenFountain": {
+          "type": "boolean"
+        },
+        "hasFestiveGarland": {
+          "type": "boolean"
+        },
+        "upgradeTier": {
+          "type": "integer"
+        },
+        "checkInCount": {
+          "type": "integer"
+        },
+        "lastCheckInDay": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "plotId",
+        "ownerUid",
+        "ownerUsername",
+        "bio",
+        "hasDrivewayLights",
+        "hasFlowerPlanters",
+        "hasGardenFountain",
+        "hasFestiveGarland",
+        "upgradeTier",
+        "checkInCount",
+        "lastCheckInDay",
+        "updatedAt"
+      ]
+    },
+    "PlotGuestbookEntryDoc": {
+      "title": "Plot Guestbook Entry",
+      "description": "Publicly readable visitor guestbook note left at a resident house plot.",
+      "type": "object",
+      "properties": {
+        "entryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "plotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "entryId",
+        "plotId",
+        "authorUid",
+        "authorName",
+        "message",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -378,6 +543,18 @@
     "/test/{docId}": {
       "schema": { "$ref": "#/entities/ConnectionTestDoc" },
       "description": "Public read-only boot connectivity check."
+    },
+    "/resident_wallets/{userId}": {
+      "schema": { "$ref": "#/entities/ResidentWalletDoc" },
+      "description": "Owner-private daily check-in streak and town currency wallet."
+    },
+    "/plot_customizations/{plotId}": {
+      "schema": { "$ref": "#/entities/PlotCustomizationDoc" },
+      "description": "Publicly readable house exterior upgrades and resident bio."
+    },
+    "/plot_guestbook/{entryId}": {
+      "schema": { "$ref": "#/entities/PlotGuestbookEntryDoc" },
+      "description": "Publicly readable visitor guestbook entries left on residential plots."
     }
   }
 }

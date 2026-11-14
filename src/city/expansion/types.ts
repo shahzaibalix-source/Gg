@@ -107,6 +107,8 @@ export interface ExpansionPlotSpec {
   houseStyle: HouseStyleSpec | null;
   gardenTreeCount: 1 | 2 | 3;
   gardenFlowerTint: string;
+  hasParkedCar?: boolean;
+  streetName?: string;
 }
 
 export interface ExpansionRoadSpec {

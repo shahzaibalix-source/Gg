@@ -291,6 +291,18 @@ export function resolveActiveWorldInteraction(
       } else if (ep.houseStyle && dDoor <= 6.8) {
         const isOpen = Boolean(openDoors[ep.plotId]);
         const tierLabel = ep.status === 'og' ? `OG #${ep.resident?.ogRank ?? ''}` : ep.plotCode;
+        const baseActions: NearbyInteractable['actions'] = [
+          { id: 'view-house', label: 'View House' },
+          { id: 'toggle-door', label: isOpen ? 'Close Door' : 'Open Door' },
+        ];
+        if (ep.status !== 'og') {
+          baseActions.push(
+            { id: 'check-in-plot', label: 'Daily Check-In' },
+            { id: 'sign-guestbook', label: 'Guestbook' },
+          );
+        } else {
+          baseActions.push({ id: 'view-owner', label: 'View Owner' });
+        }
         candidates.push({
           score: dDoor,
           item: {
@@ -302,11 +314,7 @@ export function resolveActiveWorldInteraction(
             subtitle: `${tierLabel} · ${ep.resident?.residentId ?? ''} · ${ep.districtName}`,
             distance: dDoor,
             expansionPlotId: ep.plotId,
-            actions: [
-              { id: 'view-house', label: 'View House' },
-              { id: 'view-owner', label: 'View Owner' },
-              { id: 'toggle-door', label: isOpen ? 'Close Door' : 'Open Door' },
-            ],
+            actions: baseActions,
           },
         });
       } else if (!ep.houseStyle && dCenter <= 7.2) {

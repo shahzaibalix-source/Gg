@@ -26,9 +26,9 @@ interface LabelCandidate {
   distSq: number;
 }
 
-const MAX_BADGES = 14;
-const QUERY_RADIUS = 78;
-const MAX_CACHE_TEXTURES = 40;
+const MAX_BADGES = 30;
+const QUERY_RADIUS = 105;
+const MAX_CACHE_TEXTURES = 96;
 const _lookDir = new THREE.Vector3();
 
 function drawBadgeTexture(
@@ -218,7 +218,7 @@ export const HouseOwnerLabels: React.FC<HouseOwnerLabelsProps> = ({
     }
 
     if (
-      camera.position.y > 145 &&
+      camera.position.y > 220 &&
       cameraMode !== 'walking'
     ) {
       if (lastCheckRef.current.key !== '') {

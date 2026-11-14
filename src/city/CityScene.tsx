@@ -9,6 +9,7 @@ import {
   MobileInputState,
   NearbyInteractable,
   PlayerProfile,
+  PlotCustomization,
   TimeOfDay,
   TownPlot,
   WeatherMode,
@@ -34,6 +35,7 @@ import { SpatialBirdAudioController } from './audio/SpatialBirdAudioController';
 import { ExpansionCityWorld } from './expansion/ExpansionMasterPlan';
 import { ExpansionPlotSpec } from './expansion/types';
 import { ExpandedCityRenderer } from './expansion/ExpandedCityRenderer';
+import { ExpansionLivingWorld } from './expansion/ExpansionLivingWorld';
 import { HouseOwnerLabels } from './ui/HouseOwnerLabels';
 import type { MasterCityMap } from './planning/types';
 
@@ -51,6 +53,7 @@ interface CitySceneProps {
   playerProfile: PlayerProfile;
   sittingBenchId: string | null;
   openDoors: Record<string, boolean>;
+  plotCustomizations?: Record<string, PlotCustomization>;
   playerPoseRef: React.MutableRefObject<PlayerPoseState>;
   mobileInputRef: React.MutableRefObject<MobileInputState>;
   vehicleStatesRef: React.MutableRefObject<DynamicVehicleObstacle[]>;
@@ -332,6 +335,7 @@ const CityWorldContent: React.FC<
   playerProfile,
   sittingBenchId,
   openDoors,
+  plotCustomizations = {},
   playerPoseRef,
   mobileInputRef,
   vehicleStatesRef,
@@ -406,17 +410,26 @@ const CityWorldContent: React.FC<
         onSelectPlot={(p) => onSelectPlot(p)}
       />
       {expansionWorld && (
-        <ExpandedCityRenderer
-          world={expansionWorld}
-          textures={textures}
-          timeOfDay={timeOfDay}
-          cameraMode={cameraMode}
-          playerPoseRef={playerPoseRef}
-          selectedExpansionPlotId={selectedExpansionPlotId ?? null}
-          openDoors={openDoors}
-          onSelectExpansionPlot={(ep) => onSelectExpansionPlot?.(ep)}
-          onOpenMonumentModal={() => onOpenMonumentModal?.()}
-        />
+        <>
+          <ExpandedCityRenderer
+            world={expansionWorld}
+            textures={textures}
+            timeOfDay={timeOfDay}
+            cameraMode={cameraMode}
+            playerPoseRef={playerPoseRef}
+            selectedExpansionPlotId={selectedExpansionPlotId ?? null}
+            openDoors={openDoors}
+            onSelectExpansionPlot={(ep) => onSelectExpansionPlot?.(ep)}
+            onOpenMonumentModal={() => onOpenMonumentModal?.()}
+          />
+          <ExpansionLivingWorld
+            world={expansionWorld}
+            timeOfDay={timeOfDay}
+            playerPoseRef={playerPoseRef}
+            vehicleStatesRef={vehicleStatesRef}
+            plotCustomizations={plotCustomizations}
+          />
+        </>
       )}
       <TrafficManager timeOfDay={timeOfDay} vehicleStatesRef={vehicleStatesRef} />
       <PedestrianManager />
@@ -436,6 +449,40 @@ const CityWorldContent: React.FC<
       />
     </>
   );
+};
+
+const AdaptiveDprController: React.FC<{ isSoftwareGl: boolean; isMobileGpu: boolean }> = ({
+  isSoftwareGl,
+  isMobileGpu,
+}) => {
+  const { gl } = useThree();
+  const accumTimeRef = useRef(0);
+  const frameCountRef = useRef(0);
+  const maxDpr = isSoftwareGl ? 1 : isMobileGpu ? 1.25 : Math.min(1.6, window.devicePixelRatio || 1.4);
+  const currentDprRef = useRef(maxDpr);
+
+  useFrame((_, delta) => {
+    if (isSoftwareGl) return;
+    accumTimeRef.current += Math.min(delta, 0.2);
+    frameCountRef.current += 1;
+    if (accumTimeRef.current < 1.2) return;
+    const avgFps = frameCountRef.current / accumTimeRef.current;
+    accumTimeRef.current = 0;
+    frameCountRef.current = 0;
+
+    let nextDpr = currentDprRef.current;
+    if (avgFps < 34 && nextDpr > 1.0) {
+      nextDpr = Math.max(1.0, nextDpr - 0.18);
+    } else if (avgFps > 50 && nextDpr < maxDpr) {
+      nextDpr = Math.min(maxDpr, nextDpr + 0.1);
+    }
+    if (Math.abs(nextDpr - currentDprRef.current) >= 0.05) {
+      currentDprRef.current = nextDpr;
+      gl.setPixelRatio(nextDpr);
+    }
+  });
+
+  return null;
 };
 
 export const CityScene: React.FC<CitySceneProps> = (props) => {
@@ -472,6 +519,7 @@ export const CityScene: React.FC<CitySceneProps> = (props) => {
           });
         }}
       >
+        <AdaptiveDprController isSoftwareGl={isSoftwareGl} isMobileGpu={isMobileGpu} />
         <CityWorldContent {...props} isSoftwareGl={isSoftwareGl} isMobileGpu={isMobileGpu} />
       </Canvas>
     </div>

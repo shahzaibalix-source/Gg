@@ -374,10 +374,188 @@ service cloud.firestore {
       allow list, create, update, delete: if false;
     }
 
+    function isValidResidentWallet(data, pathUid) {
+      return data.keys().hasAll([
+          'uid',
+          'balance',
+          'streakDays',
+          'lastCheckInDay',
+          'totalCheckIns',
+          'linkedPlotId',
+          'linkedPlotCode',
+          'linkedUsername',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'balance',
+          'streakDays',
+          'lastCheckInDay',
+          'totalCheckIns',
+          'linkedPlotId',
+          'linkedPlotCode',
+          'linkedUsername',
+          'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.uid == pathUid &&
+        data.balance is int && data.balance >= 0 && data.balance <= 1000000 &&
+        data.streakDays is int && data.streakDays >= 0 && data.streakDays <= 3650 &&
+        data.lastCheckInDay is string && data.lastCheckInDay.size() <= 16 &&
+        data.totalCheckIns is int && data.totalCheckIns >= 0 && data.totalCheckIns <= 36500 &&
+        data.linkedPlotId is string && data.linkedPlotId.size() <= 64 &&
+        data.linkedPlotCode is string && data.linkedPlotCode.size() <= 24 &&
+        data.linkedUsername is string && data.linkedUsername.size() <= 32 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPlotCustomization(data, pathPlotId) {
+      return data.keys().hasAll([
+          'plotId',
+          'ownerUid',
+          'ownerUsername',
+          'bio',
+          'hasDrivewayLights',
+          'hasFlowerPlanters',
+          'hasGardenFountain',
+          'hasFestiveGarland',
+          'upgradeTier',
+          'checkInCount',
+          'lastCheckInDay',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'plotId',
+          'ownerUid',
+          'ownerUsername',
+          'bio',
+          'hasDrivewayLights',
+          'hasFlowerPlanters',
+          'hasGardenFountain',
+          'hasFestiveGarland',
+          'upgradeTier',
+          'checkInCount',
+          'lastCheckInDay',
+          'updatedAt'
+        ]) &&
+        isValidId(data.plotId) &&
+        data.plotId == pathPlotId &&
+        data.plotId.size() <= 64 &&
+        data.ownerUid is string && data.ownerUid.size() >= 1 && data.ownerUid.size() <= 128 &&
+        data.ownerUsername is string && data.ownerUsername.size() <= 32 &&
+        data.bio is string && data.bio.size() <= 160 &&
+        data.hasDrivewayLights is bool &&
+        data.hasFlowerPlanters is bool &&
+        data.hasGardenFountain is bool &&
+        data.hasFestiveGarland is bool &&
+        data.upgradeTier is int && data.upgradeTier >= 0 && data.upgradeTier <= 4 &&
+        data.checkInCount is int && data.checkInCount >= 0 && data.checkInCount <= 100000 &&
+        data.lastCheckInDay is string && data.lastCheckInDay.size() <= 16 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidGuestbookEntry(data, pathEntryId) {
+      return data.keys().hasAll([
+          'entryId',
+          'plotId',
+          'authorUid',
+          'authorName',
+          'message',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'entryId',
+          'plotId',
+          'authorUid',
+          'authorName',
+          'message',
+          'createdAt'
+        ]) &&
+        isValidId(data.entryId) &&
+        data.entryId == pathEntryId &&
+        isValidId(data.plotId) &&
+        data.plotId.size() <= 64 &&
+        data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128 &&
+        data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 32 &&
+        data.message is string && data.message.size() >= 1 && data.message.size() <= 180 &&
+        data.createdAt is timestamp;
+    }
+
     // Boot Connection Check Endpoint
     match /test/{docId} {
       allow get: if isValidId(docId);
       allow list, create, update, delete: if false;
+    }
+
+    // Resident Daily Check-In Wallet & Town Currency (Owner-private)
+    match /resident_wallets/{userId} {
+      allow get: if isVerifiedUser() && isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidResidentWallet(incoming(), userId) &&
+        incoming().balance >= 0 &&
+        incoming().balance <= 150 &&
+        incoming().totalCheckIns <= 1 &&
+        incoming().streakDays <= 1 &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidResidentWallet(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            incoming().lastCheckInDay != existing().lastCheckInDay &&
+            incoming().totalCheckIns == existing().totalCheckIns + 1 &&
+            incoming().balance >= existing().balance &&
+            incoming().balance <= existing().balance + 250 &&
+            incoming().streakDays <= existing().streakDays + 1
+          ) ||
+          (
+            incoming().lastCheckInDay == existing().lastCheckInDay &&
+            incoming().totalCheckIns == existing().totalCheckIns &&
+            incoming().streakDays == existing().streakDays &&
+            incoming().balance <= existing().balance
+          )
+        );
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // Publicly Readable Plot Customizations, Exterior Upgrades & Resident Bio
+    match /plot_customizations/{plotId} {
+      allow get: if isValidId(plotId);
+      allow list: if true;
+      allow create: if isVerifiedUser() &&
+        isValidId(plotId) &&
+        isValidPlotCustomization(incoming(), plotId) &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser() &&
+        isValidId(plotId) &&
+        isValidPlotCustomization(incoming(), plotId) &&
+        (existing().ownerUid == request.auth.uid || isAdmin()) &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().plotId == existing().plotId &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(plotId);
+    }
+
+    // Publicly Readable Plot Guestbook Notes
+    match /plot_guestbook/{entryId} {
+      allow get: if isValidId(entryId);
+      allow list: if true;
+      allow create: if isVerifiedUser() &&
+        isValidId(entryId) &&
+        isValidGuestbookEntry(incoming(), entryId) &&
+        incoming().authorUid == request.auth.uid &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isVerifiedUser() &&
+        isValidId(entryId) &&
+        (existing().authorUid == request.auth.uid || isAdmin());
     }
   }
 }

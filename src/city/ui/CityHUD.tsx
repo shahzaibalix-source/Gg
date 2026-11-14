@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Award,
   BarChart3,
   Bird,
   Building2,
+  CalendarCheck,
   Car,
   ChevronDown,
   ChevronUp,
@@ -23,18 +24,23 @@ import {
   Hammer,
   Home,
   Info,
+  Layers,
   LogIn,
   LogOut,
   Map as MapIcon,
   MapPin,
+  MessageSquarePlus,
   Moon,
   Move,
   Music,
   Navigation,
+  Search,
+  Send,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Smartphone,
+  Sparkles,
   Sun,
   Sunrise,
   Sunset,
@@ -54,7 +60,11 @@ import {
   InteractionActionId,
   NearbyInteractable,
   PlayerProfile,
+  PlotCustomization,
+  PlotGuestbookEntry,
+  PlotUpgradeId,
   PrivateResidentRecord,
+  ResidentWallet,
   TimeOfDay,
   TownFinancialStats,
   TownPlot,
@@ -74,6 +84,8 @@ import {
 } from './AdminPanel';
 import { FullCityMapModal } from './FullCityMapModal';
 import { OGMonumentModal } from './OGMonumentModal';
+import { DailyCheckInModal } from './DailyCheckInModal';
+import { DistrictDirectoryDrawer } from './DistrictDirectoryDrawer';
 import type { ExpansionCityWorld } from '../expansion/ExpansionMasterPlan';
 import type {
   ExpansionManifest,
@@ -211,9 +223,28 @@ interface CityHUDProps {
   onRegenerateBlock: (blockId: string) => void;
   onExpandCityBlock: () => void;
   onResetMasterPlan: () => void;
+  wallet?: ResidentWallet | null;
+  plotCustomizations?: Record<string, PlotCustomization>;
+  guestbookEntries?: PlotGuestbookEntry[];
+  checkInModalOpen?: boolean;
+  districtDrawerOpen?: boolean;
+  checkInBusy?: boolean;
+  checkInNotice?: string | null;
+  onToggleCheckInModal?: (open?: boolean) => void;
+  onToggleDistrictDrawer?: (open?: boolean) => void;
+  onClearCheckInNotice?: () => void;
+  onLinkPlot?: (plot: ExpansionPlotSpec) => Promise<void>;
+  onDailyCheckIn?: (plot: ExpansionPlotSpec) => Promise<void>;
+  onPurchasePlotUpgrade?: (plot: ExpansionPlotSpec, upgradeId: PlotUpgradeId, cost: number) => Promise<void>;
+  onSavePlotBio?: (plot: ExpansionPlotSpec, bio: string) => Promise<void>;
+  onAddGuestbookEntry?: (plotId: string, message: string) => Promise<void>;
+  onDeleteGuestbookEntry?: (entryId: string) => Promise<void>;
 }
 
 const TOUR_LABELS: Array<{ id: CinematicTourId; label: string }> = [
+  { id: 'grand-7-district-tour', label: 'Grand 7-District Tour' },
+  { id: 'central-gardens-orbit', label: 'Central Gardens Orbit' },
+  { id: 'lakeside-sunset-cruise', label: 'Lakeside Sunset Cruise' },
   { id: 'town-hall-reveal', label: 'Town Hall Reveal' },
   { id: 'residential-flyover', label: 'Residential Neighbourhood' },
   { id: 'luxury-flyover', label: 'Luxury Villas' },
@@ -327,6 +358,22 @@ export const CityHUD: React.FC<CityHUDProps> = ({
   onRegenerateBlock,
   onExpandCityBlock,
   onResetMasterPlan,
+  wallet = null,
+  plotCustomizations = {},
+  guestbookEntries = [],
+  checkInModalOpen = false,
+  districtDrawerOpen = false,
+  checkInBusy = false,
+  checkInNotice = null,
+  onToggleCheckInModal,
+  onToggleDistrictDrawer,
+  onClearCheckInNotice,
+  onLinkPlot,
+  onDailyCheckIn,
+  onPurchasePlotUpgrade,
+  onSavePlotBio,
+  onAddGuestbookEntry,
+  onDeleteGuestbookEntry,
 }) => {
   const [dockCollapsed, setDockCollapsed] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -335,6 +382,67 @@ export const CityHUD: React.FC<CityHUDProps> = ({
   );
   const [bizOwnerInput, setBizOwnerInput] = useState('');
   const [confirmInspectorDemolishId, setConfirmInspectorDemolishId] = useState<string | null>(null);
+  const [hudSearchQuery, setHudSearchQuery] = useState('');
+  const [hudSearchOpen, setHudSearchOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [guestbookDraft, setGuestbookDraft] = useState('');
+  const [guestbookBusy, setGuestbookBusy] = useState(false);
+
+  const hudSearchMatches = useMemo(() => {
+    const q = hudSearchQuery.trim().toLowerCase().replace(/^@/, '');
+    if (!q) return [];
+    const results: Array<{
+      id: string;
+      label: string;
+      subtitle: string;
+      x: number;
+      z: number;
+      expPlot?: ExpansionPlotSpec;
+      corePlot?: TownPlot;
+    }> = [];
+
+    for (const p of plots) {
+      const owner = (p.ownerUsername ?? '').toLowerCase().replace(/^@/, '');
+      const title = (p.publicBuilding?.name ?? p.business?.name ?? '').toLowerCase();
+      if (
+        owner.includes(q) ||
+        p.plotCode.toLowerCase().includes(q) ||
+        title.includes(q)
+      ) {
+        results.push({
+          id: `core:${p.id}`,
+          label: p.ownerUsername || p.publicBuilding?.name || p.business?.name || p.plotCode,
+          subtitle: `${p.plotCode} · ${p.address}`,
+          x: p.center.x,
+          z: p.center.z,
+          corePlot: p,
+        });
+        if (results.length >= 8) return results;
+      }
+    }
+
+    if (expansionWorld) {
+      for (const ep of expansionWorld.plots) {
+        const uname = ep.resident?.usernameKey ?? '';
+        if (
+          uname.includes(q) ||
+          ep.plotCode.toLowerCase().includes(q) ||
+          (ep.resident?.residentId ?? '').toLowerCase().includes(q)
+        ) {
+          results.push({
+            id: `exp:${ep.plotId}`,
+            label: ep.resident ? `@${ep.resident.username}` : ep.plotCode,
+            subtitle: `${ep.plotCode} · ${ep.districtName}`,
+            x: ep.x,
+            z: ep.z,
+            expPlot: ep,
+          });
+          if (results.length >= 8) break;
+        }
+      }
+    }
+    return results;
+  }, [hudSearchQuery, plots, expansionWorld]);
 
   if (uiHidden) {
     return (
@@ -388,7 +496,148 @@ export const CityHUD: React.FC<CityHUDProps> = ({
           </span>
         </div>
 
+        {/* Desktop Quick-Jump @username / LDF-xxxx Search Bar */}
+        <div className="pointer-events-auto relative hidden lg:flex items-center">
+          <div className="relative flex items-center">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
+            <input
+              type="text"
+              value={hudSearchQuery}
+              onFocus={() => setHudSearchOpen(true)}
+              onChange={(e) => {
+                setHudSearchQuery(e.target.value);
+                setHudSearchOpen(true);
+              }}
+              placeholder="Find @username or LDF-xxxx..."
+              aria-label="Find a resident by username or plot code"
+              className="w-56 h-8 pl-8 pr-7 rounded-lg bg-[#10151c]/92 border border-white/14 text-xs text-white placeholder:text-slate-400 focus:outline-none focus:border-amber-400/60"
+            />
+            {hudSearchQuery && (
+              <button
+                type="button"
+                aria-label="Clear resident search"
+                onClick={() => {
+                  setHudSearchQuery('');
+                  setHudSearchOpen(false);
+                }}
+                className="absolute right-1.5 p-0.5 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {hudSearchOpen && hudSearchQuery.trim() && (
+            <div className="absolute top-9 left-0 w-72 rounded-xl bg-[#10151c]/96 border border-white/15 shadow-2xl overflow-hidden z-40">
+              {hudSearchMatches.length === 0 ? (
+                <div className="px-3 py-2.5 text-[11px] text-slate-400">
+                  No resident matching &ldquo;{hudSearchQuery}&rdquo;
+                </div>
+              ) : (
+                <div className="divide-y divide-white/8 max-h-64 overflow-y-auto">
+                  {hudSearchMatches.map((m) => (
+                    <div
+                      key={m.id}
+                      className="px-2.5 py-2 flex items-center justify-between gap-2 hover:bg-white/5"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white truncate">{m.label}</div>
+                        <div className="text-[10px] text-slate-400 truncate">{m.subtitle}</div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (m.expPlot) {
+                              onSelectPlot(null);
+                              onSelectExpansionPlot?.(m.expPlot);
+                            } else if (m.corePlot) {
+                              onSelectExpansionPlot?.(null);
+                              onSelectPlot(m.corePlot);
+                            }
+                            onFocusLocation(m.x, m.z, 38);
+                            setHudSearchOpen(false);
+                          }}
+                          className="h-6 px-2 rounded bg-[#1b2430] hover:bg-[#253141] border border-white/12 text-[10px] font-medium text-sky-200 cursor-pointer"
+                        >
+                          Fly
+                        </button>
+                        {onWalkToLocation && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (m.expPlot) {
+                                onSelectPlot(null);
+                                onSelectExpansionPlot?.(m.expPlot);
+                              } else if (m.corePlot) {
+                                onSelectExpansionPlot?.(null);
+                                onSelectPlot(m.corePlot);
+                              }
+                              onWalkToLocation(m.x, m.z, m.expPlot, m.corePlot);
+                              setHudSearchOpen(false);
+                            }}
+                            className="h-6 px-2 rounded bg-amber-500 hover:bg-amber-400 text-[10px] font-semibold text-slate-950 cursor-pointer"
+                          >
+                            Walk
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="pointer-events-auto flex items-center gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={() => setMobileSearchOpen((v) => !v)}
+            title="Find @username or LDF-xxxx"
+            aria-label="Search Resident"
+            className={`lg:hidden w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg border cursor-pointer ${
+              mobileSearchOpen
+                ? 'bg-sky-500 text-slate-950 border-sky-300'
+                : 'bg-[#10151c]/90 text-slate-200 border-white/14 hover:bg-[#1c2430]'
+            }`}
+          >
+            <Search className="w-3 h-3" />
+          </button>
+
+          {onToggleCheckInModal && (
+            <button
+              type="button"
+              onClick={() => onToggleCheckInModal(true)}
+              title="Resident Daily Check-In & LDF Coin Upgrades"
+              className={`h-7 sm:h-8 flex items-center gap-1 px-1.5 sm:px-2 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors whitespace-nowrap ${
+                checkInModalOpen
+                  ? 'bg-emerald-500 text-slate-950 border-emerald-300'
+                  : 'bg-[#10151c]/90 text-emerald-200 border-emerald-400/35 hover:bg-[#1c2430]'
+              }`}
+            >
+              <CalendarCheck className="w-3 h-3" />
+              <span className="font-mono-tabular">
+                {wallet ? `${wallet.balance.toLocaleString()} LDF` : 'Check-In'}
+              </span>
+            </button>
+          )}
+
+          {onToggleDistrictDrawer && expansionWorld && (
+            <button
+              type="button"
+              onClick={() => onToggleDistrictDrawer(true)}
+              title="7 Residential Districts Directory"
+              className={`h-7 sm:h-8 flex items-center gap-1 px-1.5 sm:px-2 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors whitespace-nowrap ${
+                districtDrawerOpen
+                  ? 'bg-violet-400 text-slate-950 border-violet-300'
+                  : 'bg-[#10151c]/90 text-violet-200 border-violet-400/35 hover:bg-[#1c2430]'
+              }`}
+            >
+              <Layers className="w-3 h-3" />
+              <span className="hidden md:inline">Districts</span>
+            </button>
+          )}
+
           {onToggleCityMap && (
             <button
               type="button"
@@ -482,6 +731,84 @@ export const CityHUD: React.FC<CityHUDProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Mobile Search Dropdown Bar */}
+      {mobileSearchOpen && (
+        <div className="lg:hidden fixed top-11 inset-x-2 z-30 rounded-xl bg-[#10151c]/96 border border-white/15 p-2 shadow-2xl space-y-1.5">
+          <div className="relative flex items-center">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5" />
+            <input
+              type="text"
+              autoFocus
+              value={hudSearchQuery}
+              onChange={(e) => setHudSearchQuery(e.target.value)}
+              placeholder="Find @username or LDF-xxxx..."
+              className="w-full h-8 pl-8 pr-7 rounded-lg bg-[#18202a] border border-white/15 text-xs text-white placeholder:text-slate-400"
+            />
+            <button
+              type="button"
+              onClick={() => setMobileSearchOpen(false)}
+              className="absolute right-1.5 p-0.5 text-slate-400 hover:text-white cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {hudSearchQuery.trim() && (
+            <div className="max-h-48 overflow-y-auto divide-y divide-white/8">
+              {hudSearchMatches.length === 0 ? (
+                <div className="py-2 px-1 text-[11px] text-slate-400">No resident matched.</div>
+              ) : (
+                hudSearchMatches.map((m) => (
+                  <div key={m.id} className="py-1.5 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-white truncate">{m.label}</div>
+                      <div className="text-[10px] text-slate-400 truncate">{m.subtitle}</div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (m.expPlot) {
+                            onSelectPlot(null);
+                            onSelectExpansionPlot?.(m.expPlot);
+                          } else if (m.corePlot) {
+                            onSelectExpansionPlot?.(null);
+                            onSelectPlot(m.corePlot);
+                          }
+                          onFocusLocation(m.x, m.z, 38);
+                          setMobileSearchOpen(false);
+                        }}
+                        className="h-6 px-2 rounded bg-[#1b2430] border border-white/12 text-[10px] text-sky-200 cursor-pointer"
+                      >
+                        Fly
+                      </button>
+                      {onWalkToLocation && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (m.expPlot) {
+                              onSelectPlot(null);
+                              onSelectExpansionPlot?.(m.expPlot);
+                            } else if (m.corePlot) {
+                              onSelectExpansionPlot?.(null);
+                              onSelectPlot(m.corePlot);
+                            }
+                            onWalkToLocation(m.x, m.z, m.expPlot, m.corePlot);
+                            setMobileSearchOpen(false);
+                          }}
+                          className="h-6 px-2 rounded bg-amber-500 text-[10px] font-semibold text-slate-950 cursor-pointer"
+                        >
+                          Walk
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {authError && (
         <div
@@ -780,6 +1107,12 @@ export const CityHUD: React.FC<CityHUDProps> = ({
                   <span className="text-slate-400">Address</span>
                   <span className="text-slate-200 truncate">{selectedExpansionPlot.address}</span>
                 </div>
+                {selectedExpansionPlot.streetName && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-400">Street</span>
+                    <span className="text-slate-200 truncate">{selectedExpansionPlot.streetName}</span>
+                  </div>
+                )}
                 {selectedExpansionPlot.resident && (
                   <>
                     <div className="flex justify-between gap-2">
@@ -805,6 +1138,30 @@ export const CityHUD: React.FC<CityHUDProps> = ({
                     </span>
                   </div>
                 )}
+                {(() => {
+                  const cust = plotCustomizations[selectedExpansionPlot.plotId];
+                  if (!cust) return null;
+                  const upgrades: string[] = [];
+                  if (cust.hasDrivewayLights) upgrades.push('Driveway Lamps');
+                  if (cust.hasFlowerPlanters) upgrades.push('Flower Planters');
+                  if (cust.hasGardenFountain) upgrades.push('Fountain');
+                  if (cust.hasFestiveGarland) upgrades.push('Warm Garland');
+                  return (
+                    <div className="mt-1.5 pt-1.5 border-t border-white/10 space-y-1">
+                      {cust.bio && (
+                        <p className="text-[11px] text-amber-100/90 italic leading-snug">
+                          &ldquo;{cust.bio}&rdquo;
+                        </p>
+                      )}
+                      {upgrades.length > 0 && (
+                        <div className="flex items-center gap-1 text-[10px] text-emerald-300">
+                          <Sparkles className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{upgrades.join(' · ')}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="mt-2.5 pt-2 border-t border-white/10 flex flex-wrap gap-1.5">
@@ -847,6 +1204,19 @@ export const CityHUD: React.FC<CityHUDProps> = ({
                       </span>
                     </button>
                   )}
+                {selectedExpansionPlot.status !== 'vip' &&
+                  selectedExpansionPlot.status !== 'og' &&
+                  selectedExpansionPlot.status !== 'expansion-open' &&
+                  onToggleCheckInModal && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleCheckInModal(true)}
+                      className="w-full min-h-[30px] flex items-center justify-center gap-1 px-2 rounded-md bg-emerald-500/18 hover:bg-emerald-500/28 border border-emerald-400/35 text-[11px] font-semibold text-emerald-200 cursor-pointer"
+                    >
+                      <CalendarCheck className="w-3 h-3" />
+                      <span>Daily Check-In &amp; Upgrades</span>
+                    </button>
+                  )}
                 {(selectedExpansionPlot.status === 'vip' || selectedExpansionPlot.status === 'og') &&
                   onToggleOgMonument && (
                     <button
@@ -859,6 +1229,100 @@ export const CityHUD: React.FC<CityHUDProps> = ({
                     </button>
                   )}
               </div>
+
+              {/* Resident House Guestbook */}
+              {selectedExpansionPlot.status !== 'expansion-open' && onAddGuestbookEntry && (
+                <div className="mt-2.5 pt-2 border-t border-white/10 space-y-2">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-semibold text-slate-200 flex items-center gap-1">
+                      <MessageSquarePlus className="w-3 h-3 text-sky-300" />
+                      <span>House Guestbook</span>
+                    </span>
+                    <span className="text-[10px] font-mono-tabular text-slate-400">
+                      {guestbookEntries.length} notes
+                    </span>
+                  </div>
+
+                  {guestbookEntries.length > 0 ? (
+                    <div className="max-h-28 overflow-y-auto space-y-1.5 pr-0.5">
+                      {guestbookEntries.map((entry) => (
+                        <div
+                          key={entry.entryId}
+                          className="p-2 rounded-lg bg-[#161d27] border border-white/8 text-[11px]"
+                        >
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-semibold text-sky-200 truncate">
+                              {entry.authorName}
+                            </span>
+                            {(entry.authorUid === currentUserUid || isSuperAdmin) &&
+                              onDeleteGuestbookEntry && (
+                                <button
+                                  type="button"
+                                  aria-label="Delete guestbook note"
+                                  onClick={() => void onDeleteGuestbookEntry(entry.entryId)}
+                                  className="text-slate-400 hover:text-rose-300 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
+                          </div>
+                          <p className="text-slate-200 mt-0.5 leading-snug break-words">
+                            {entry.message}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-400">
+                      No guestbook notes yet. Be the first neighbor to say hello!
+                    </p>
+                  )}
+
+                  {isSignedIn ? (
+                    <form
+                      className="flex gap-1.5"
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        const msg = guestbookDraft.trim();
+                        if (!msg || guestbookBusy) return;
+                        setGuestbookBusy(true);
+                        try {
+                          await onAddGuestbookEntry(selectedExpansionPlot.plotId, msg);
+                          setGuestbookDraft('');
+                        } finally {
+                          setGuestbookBusy(false);
+                        }
+                      }}
+                    >
+                      <input
+                        type="text"
+                        maxLength={180}
+                        value={guestbookDraft}
+                        onChange={(e) => setGuestbookDraft(e.target.value)}
+                        placeholder="Leave a guestbook note..."
+                        className="min-w-0 flex-1 h-7 px-2 rounded-md bg-[#18202a] border border-white/15 text-[11px] text-white placeholder:text-slate-500"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!guestbookDraft.trim() || guestbookBusy}
+                        aria-label="Send guestbook note"
+                        className="h-7 px-2 rounded-md bg-sky-500 hover:bg-sky-400 disabled:opacity-45 text-slate-950 flex items-center justify-center cursor-pointer"
+                      >
+                        <Send className="w-3 h-3" />
+                      </button>
+                    </form>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={onSignIn}
+                      className="w-full h-7 flex items-center justify-center gap-1 rounded-md bg-[#18202a] hover:bg-[#222c3a] border border-white/12 text-[11px] text-sky-200 cursor-pointer"
+                    >
+                      <LogIn className="w-3 h-3" />
+                      <span>Sign In with Google to Sign Guestbook</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </aside>
           )}
           {selectedPlot && (
@@ -1676,6 +2140,56 @@ export const CityHUD: React.FC<CityHUDProps> = ({
               onFocusLocation(plot.x, plot.z, 38);
             }
             onToggleOgMonument(false);
+          }}
+        />
+      )}
+
+      {/* Resident Daily Check-In & 3D Plot Upgrades Modal */}
+      {onToggleCheckInModal &&
+        onLinkPlot &&
+        onDailyCheckIn &&
+        onPurchasePlotUpgrade &&
+        onSavePlotBio && (
+          <DailyCheckInModal
+            isOpen={checkInModalOpen}
+            onClose={() => onToggleCheckInModal(false)}
+            isSignedIn={isSignedIn}
+            currentUserUid={currentUserUid}
+            onSignIn={onSignIn}
+            expansionWorld={expansionWorld}
+            selectedExpansionPlot={selectedExpansionPlot}
+            wallet={wallet}
+            plotCustomizations={plotCustomizations}
+            actionBusy={checkInBusy}
+            notice={checkInNotice}
+            onClearNotice={() => onClearCheckInNotice?.()}
+            onLinkPlot={onLinkPlot}
+            onDailyCheckIn={onDailyCheckIn}
+            onPurchaseUpgrade={onPurchasePlotUpgrade}
+            onSaveBio={onSavePlotBio}
+            onFlyToPlot={(plot) => {
+              onSelectPlot(null);
+              onSelectExpansionPlot?.(plot);
+              onFocusLocation(plot.x, plot.z, 36);
+            }}
+            onWalkToPlot={(plot) => {
+              onSelectPlot(null);
+              onSelectExpansionPlot?.(plot);
+              onWalkToLocation?.(plot.x, plot.z, plot);
+            }}
+          />
+        )}
+
+      {/* 7-District Residential Directory Drawer */}
+      {onToggleDistrictDrawer && (
+        <DistrictDirectoryDrawer
+          isOpen={districtDrawerOpen}
+          onClose={() => onToggleDistrictDrawer(false)}
+          expansionWorld={expansionWorld}
+          onFlyToDistrict={(x, z, zoom) => onFocusLocation(x, z, zoom)}
+          onStartGrandTour={() => {
+            onChangeCameraMode('cinematic');
+            onChangeCinematicTour('grand-7-district-tour');
           }}
         />
       )}
