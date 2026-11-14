@@ -1,0 +1,328 @@
+{
+  "entities": {
+    "TownPlotOverrideDoc": {
+      "title": "Town Plot State",
+      "description": "Publicly readable plot ownership, resident in-game username, upgrade tier, and building configuration. Managed solely by Super Admin.",
+      "type": "object",
+      "properties": {
+        "plotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "facingAngle": {
+          "type": "number"
+        },
+        "ownershipStatus": {
+          "type": "string",
+          "enum": ["occupied", "available", "reserved", "civic"],
+          "maxLength": 16
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "ownerUsername": {
+          "type": "string",
+          "description": "Publicly displayed in-game resident username (no private contact details).",
+          "maxLength": 24
+        },
+        "verificationState": {
+          "type": "string",
+          "enum": ["unverified-local", "pending-oauth", "verified-community", "none"],
+          "maxLength": 24
+        },
+        "claimedAt": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "upgradeLevel": {
+          "type": "integer"
+        },
+        "houseArchetype": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "hasGarageCarport": {
+          "type": "boolean"
+        },
+        "hasPool": {
+          "type": "boolean"
+        },
+        "hasBalcony": {
+          "type": "boolean"
+        },
+        "businessCategory": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "businessName": {
+          "type": "string",
+          "maxLength": 48
+        },
+        "businessOwnerUsername": {
+          "type": "string",
+          "maxLength": 24
+        },
+        "businessStatus": {
+          "type": "string",
+          "enum": ["open", "upgrading", "available", "none"],
+          "maxLength": 16
+        },
+        "businessLevel": {
+          "type": "integer"
+        },
+        "businessDailyRevenue": {
+          "type": "integer"
+        },
+        "updatedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "plotId",
+        "facingAngle",
+        "ownershipStatus",
+        "ownerUid",
+        "ownerUsername",
+        "verificationState",
+        "claimedAt",
+        "upgradeLevel",
+        "houseArchetype",
+        "hasGarageCarport",
+        "hasPool",
+        "hasBalcony",
+        "businessCategory",
+        "businessName",
+        "businessOwnerUsername",
+        "businessStatus",
+        "businessLevel",
+        "businessDailyRevenue",
+        "updatedByUid",
+        "updatedAt"
+      ]
+    },
+    "TownEconomyDoc": {
+      "title": "Town Economy",
+      "description": "Publicly readable Lindenhof town treasury balance managed solely by Super Admin.",
+      "type": "object",
+      "properties": {
+        "treasuryBalance": {
+          "type": "integer"
+        },
+        "lastCollectedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["treasuryBalance", "lastCollectedByUid", "updatedAt"]
+    },
+    "TownSettingsDoc": {
+      "title": "Town Public Welcome & Instagram Settings",
+      "description": "Publicly readable welcome screen copy and official Instagram profile URL managed solely by Super Admin.",
+      "type": "object",
+      "properties": {
+        "welcomeTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "welcomeSubtitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 260
+        },
+        "instagramUrl": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 200,
+          "pattern": "^https://.*$"
+        },
+        "instagramInstruction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 280
+        },
+        "updatedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "welcomeTitle",
+        "welcomeSubtitle",
+        "instagramUrl",
+        "instagramInstruction",
+        "updatedByUid",
+        "updatedAt"
+      ]
+    },
+    "PrivateResidentRecordDoc": {
+      "title": "Private Resident Assignment Record",
+      "description": "Admin-only private resident approval details including requested Instagram handle and review notes. Never exposed publicly.",
+      "type": "object",
+      "properties": {
+        "plotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inGameUsername": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 24
+        },
+        "instagramHandle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "approvedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "approvedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "plotId",
+        "inGameUsername",
+        "instagramHandle",
+        "notes",
+        "approvedByUid",
+        "approvedAt",
+        "updatedAt"
+      ]
+    },
+    "ResidentUsernameLockDoc": {
+      "title": "Resident Username Uniqueness Lock",
+      "description": "Admin-only lookup preventing duplicate resident house assignments for the same in-game username.",
+      "type": "object",
+      "properties": {
+        "usernameKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "plotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedByUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["usernameKey", "plotId", "updatedByUid", "updatedAt"]
+    },
+    "AdminEntryDoc": {
+      "title": "Authorized Admin Record",
+      "description": "Authorized Super Admin identity record.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "grantedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "grantedAt"]
+    },
+    "AdminGateDoc": {
+      "title": "Admin Authorization Probe",
+      "description": "Read-only admin verification gate probed via server read.",
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ConnectionTestDoc": {
+      "title": "Firestore Boot Connection Probe",
+      "description": "Read-only connection verification document.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/town_plots/{plotId}": {
+      "schema": { "$ref": "#/entities/TownPlotOverrideDoc" },
+      "description": "Publicly readable plot & house display state; writable exclusively by Super Admin."
+    },
+    "/town_meta/economy": {
+      "schema": { "$ref": "#/entities/TownEconomyDoc" },
+      "description": "Publicly readable town treasury metadata; writable exclusively by Super Admin."
+    },
+    "/town_meta/settings": {
+      "schema": { "$ref": "#/entities/TownSettingsDoc" },
+      "description": "Publicly readable welcome screen copy & Instagram profile link; writable exclusively by Super Admin."
+    },
+    "/resident_records/{plotId}": {
+      "schema": { "$ref": "#/entities/PrivateResidentRecordDoc" },
+      "description": "Private admin-only resident approval records containing Instagram usernames and review notes."
+    },
+    "/resident_usernames/{usernameKey}": {
+      "schema": { "$ref": "#/entities/ResidentUsernameLockDoc" },
+      "description": "Admin-only uniqueness lock preventing duplicate house assignments."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminEntryDoc" },
+      "description": "Server/Admin-only Super Admin roster."
+    },
+    "/admin_gate/{docId}": {
+      "schema": { "$ref": "#/entities/AdminGateDoc" },
+      "description": "Admin-only server probe endpoint."
+    },
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/ConnectionTestDoc" },
+      "description": "Public read-only boot connectivity check."
+    }
+  }
+}

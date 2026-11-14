@@ -1,0 +1,508 @@
+import React, { useEffect, useMemo, useRef } from 'react';
+import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
+import { CityTextureSet } from '../materials/proceduralTextures';
+import {
+  INTERSECTIONS,
+  PARKED_CARS,
+  ROAD_SEGMENTS,
+  ROAD_SURFACE_Y,
+  ROUNDABOUT_CENTERS,
+  SIDEWALK_HEIGHT,
+  SIDEWALK_PADS,
+  STREET_LAMPS,
+} from './MasterTownBlueprint';
+import { EuropeanStreetLamp, StylizedTree } from '../assets/FoliageAndProps';
+import { CarMesh } from '../assets/VehicleModels';
+import { sharedTrafficSignals, updateSharedTrafficSignals } from '../simulation/trafficSignals';
+import { TimeOfDay } from '../types';
+import { VastCountryside } from './VastCountryside';
+
+interface RoadAndSidewalkSystemProps {
+  textures: CityTextureSet;
+  timeOfDay: TimeOfDay;
+}
+
+const SIGNAL_GEOS = {
+  pole: new THREE.CylinderGeometry(0.07, 0.09, 3.7, 8),
+  box: new THREE.BoxGeometry(0.36, 0.96, 0.28),
+  lamp: new THREE.SphereGeometry(0.09, 10, 10),
+};
+
+const SIGNAL_MATERIALS = {
+  pole: new THREE.MeshStandardMaterial({ color: '#272c33', roughness: 0.45, metalness: 0.65 }),
+  housing: new THREE.MeshStandardMaterial({ color: '#1d2126', roughness: 0.5, metalness: 0.5 }),
+};
+
+const SIGN_GEOS = {
+  pole: new THREE.CylinderGeometry(0.04, 0.04, 2.3, 6),
+  yield: new THREE.ConeGeometry(0.3, 0.05, 3),
+  speed: new THREE.CylinderGeometry(0.25, 0.25, 0.04, 16),
+};
+
+const SIGN_MATERIALS = {
+  pole: new THREE.MeshStandardMaterial({ color: '#6e7680', roughness: 0.4, metalness: 0.6 }),
+  yield: new THREE.MeshStandardMaterial({ color: '#dc2626', roughness: 0.45 }),
+  speed: new THREE.MeshStandardMaterial({ color: '#f5f5f4', roughness: 0.45 }),
+};
+
+const TrafficSignalPost: React.FC<{
+  position: [number, number, number];
+  rotationY: number;
+  axis: 'ns' | 'ew';
+}> = ({ position, rotationY, axis }) => {
+  const redRef = useRef<THREE.MeshStandardMaterial>(null);
+  const amberRef = useRef<THREE.MeshStandardMaterial>(null);
+  const greenRef = useRef<THREE.MeshStandardMaterial>(null);
+
+  useFrame(() => {
+    const aspect = axis === 'ns' ? sharedTrafficSignals.nsAspect : sharedTrafficSignals.ewAspect;
+    if (redRef.current) redRef.current.emissiveIntensity = aspect === 'red' ? 2.2 : 0.08;
+    if (amberRef.current) amberRef.current.emissiveIntensity = aspect === 'amber' ? 2.2 : 0.08;
+    if (greenRef.current) greenRef.current.emissiveIntensity = aspect === 'green' ? 2.2 : 0.08;
+  });
+
+  return (
+    <group position={position} rotation={[0, rotationY, 0]}>
+      <mesh position={[0, 1.85, 0]} geometry={SIGNAL_GEOS.pole} material={SIGNAL_MATERIALS.pole} castShadow />
+      <mesh position={[0, 3.55, 0.05]} geometry={SIGNAL_GEOS.box} material={SIGNAL_MATERIALS.housing} castShadow />
+      <mesh position={[0, 3.85, 0.2]} geometry={SIGNAL_GEOS.lamp}>
+        <meshStandardMaterial ref={redRef} color="#ef4444" emissive="#ef4444" emissiveIntensity={0.1} />
+      </mesh>
+      <mesh position={[0, 3.55, 0.2]} geometry={SIGNAL_GEOS.lamp}>
+        <meshStandardMaterial ref={amberRef} color="#f59e0b" emissive="#f59e0b" emissiveIntensity={0.1} />
+      </mesh>
+      <mesh position={[0, 3.25, 0.2]} geometry={SIGNAL_GEOS.lamp}>
+        <meshStandardMaterial ref={greenRef} color="#22c55e" emissive="#22c55e" emissiveIntensity={0.1} />
+      </mesh>
+    </group>
+  );
+};
+
+const EuropeanRoadSign: React.FC<{
+  position: [number, number, number];
+  rotationY: number;
+  variant: 'yield' | 'speed30';
+}> = ({ position, rotationY, variant }) => (
+  <group position={position} rotation={[0, rotationY, 0]}>
+    <mesh position={[0, 1.15, 0]} geometry={SIGN_GEOS.pole} material={SIGN_MATERIALS.pole} castShadow />
+    {variant === 'yield' ? (
+      <mesh
+        position={[0, 2.2, 0.05]}
+        rotation={[0, 0, Math.PI]}
+        geometry={SIGN_GEOS.yield}
+        material={SIGN_MATERIALS.yield}
+      />
+    ) : (
+      <mesh
+        position={[0, 2.2, 0.05]}
+        rotation={[Math.PI / 2, 0, 0]}
+        geometry={SIGN_GEOS.speed}
+        material={SIGN_MATERIALS.speed}
+      />
+    )}
+  </group>
+);
+
+const _dummy = new THREE.Object3D();
+
+export const RoadAndSidewalkSystem: React.FC<RoadAndSidewalkSystemProps> = ({
+  textures,
+  timeOfDay,
+}) => {
+  const dashMeshRef = useRef<THREE.InstancedMesh>(null);
+  const crosswalkMeshRef = useRef<THREE.InstancedMesh>(null);
+
+  useFrame((state) => {
+    updateSharedTrafficSignals(state.clock.elapsedTime);
+  });
+
+  // Shared road marking materials
+  const roadEdgeMat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: '#d8d6cf',
+        roughness: 0.75,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+      }),
+    [],
+  );
+  const yellowLineMat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: '#e5b84b',
+        roughness: 0.68,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+      }),
+    [],
+  );
+  const whiteMarkingMat = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: '#f2efe7',
+        roughness: 0.7,
+        polygonOffset: true,
+        polygonOffsetFactor: -3,
+      }),
+    [],
+  );
+
+  useEffect(() => {
+    return () => {
+      roadEdgeMat.dispose();
+      yellowLineMat.dispose();
+      whiteMarkingMat.dispose();
+    };
+  }, [roadEdgeMat, yellowLineMat, whiteMarkingMat]);
+
+  // Precompute all dashed center-line transforms (1 InstancedMesh instead of ~150 meshes)
+  const dashTransforms = useMemo(() => {
+    const list: Array<{ x: number; y: number; z: number; rotY: number }> = [];
+    for (const seg of ROAD_SEGMENTS) {
+      if (seg.hasDoubleCenterLine) continue;
+      const dx = seg.end.x - seg.start.x;
+      const dz = seg.end.z - seg.start.z;
+      const length = Math.hypot(dx, dz);
+      const cx = (seg.start.x + seg.end.x) / 2;
+      const cz = (seg.start.z + seg.end.z) / 2;
+      const angle = Math.atan2(dx, dz);
+      const sin = Math.sin(angle);
+      const cos = Math.cos(angle);
+      const dashCount = Math.max(1, Math.floor(length / 4.5));
+
+      for (let idx = 0; idx < dashCount; idx++) {
+        const zLocal = -length / 2 + 2.25 + idx * 4.5;
+        if (Math.abs(zLocal) > length / 2 - 1.2) continue;
+        list.push({
+          x: cx + sin * zLocal,
+          y: ROAD_SURFACE_Y + 0.007,
+          z: cz + cos * zLocal,
+          rotY: angle,
+        });
+      }
+    }
+    return list;
+  }, []);
+
+  // Precompute all crosswalk stripe & stop-bar transforms (1 InstancedMesh)
+  const crosswalkTransforms = useMemo(() => {
+    const list: Array<{ x: number; y: number; z: number; rotY: number; sx: number; sz: number }> = [];
+    const stripeOffsets = [-2.6, -1.56, -0.52, 0.52, 1.56, 2.6];
+
+    for (const inter of INTERSECTIONS) {
+      const halfW = inter.width / 2;
+      const halfD = inter.depth / 2;
+      for (const dir of inter.crosswalks) {
+        const isNS = dir === 'north' || dir === 'south';
+        const sign = dir === 'south' || dir === 'east' ? 1 : -1;
+        const offset = (isNS ? halfD : halfW) + 1.45;
+        const rotY = isNS ? 0 : Math.PI / 2;
+        const sin = Math.sin(rotY);
+        const cos = Math.cos(rotY);
+
+        const groupX = inter.center.x + (isNS ? 0 : sign * offset);
+        const groupZ = inter.center.z + (isNS ? sign * offset : 0);
+
+        for (const sxLocal of stripeOffsets) {
+          list.push({
+            x: groupX + cos * sxLocal,
+            y: ROAD_SURFACE_Y + 0.008,
+            z: groupZ - sin * sxLocal,
+            rotY,
+            sx: 0.52,
+            sz: 2.2,
+          });
+        }
+
+        // Stop bar on right-hand approach
+        const sbX = sign * -2.25;
+        const sbZ = sign * 1.5;
+        list.push({
+          x: groupX + cos * sbX + sin * sbZ,
+          y: ROAD_SURFACE_Y + 0.008,
+          z: groupZ - sin * sbX + cos * sbZ,
+          rotY,
+          sx: 3.6,
+          sz: 0.24,
+        });
+      }
+    }
+    return list;
+  }, []);
+
+  useEffect(() => {
+    const mesh = dashMeshRef.current;
+    if (!mesh) return;
+    for (let i = 0; i < dashTransforms.length; i++) {
+      const t = dashTransforms[i];
+      _dummy.position.set(t.x, t.y, t.z);
+      _dummy.rotation.set(0, t.rotY, 0);
+      _dummy.scale.set(1, 1, 1);
+      _dummy.updateMatrix();
+      mesh.setMatrixAt(i, _dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [dashTransforms]);
+
+  useEffect(() => {
+    const mesh = crosswalkMeshRef.current;
+    if (!mesh) return;
+    for (let i = 0; i < crosswalkTransforms.length; i++) {
+      const t = crosswalkTransforms[i];
+      _dummy.position.set(t.x, t.y, t.z);
+      _dummy.rotation.set(0, t.rotY, 0);
+      _dummy.scale.set(t.sx, 1, t.sz);
+      _dummy.updateMatrix();
+      mesh.setMatrixAt(i, _dummy.matrix);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [crosswalkTransforms]);
+
+  // Perimeter tree groves cleanly outside the 140m road & district footprint
+  const perimeterTrees = useMemo(() => {
+    const trees: Array<{
+      x: number;
+      z: number;
+      scale: number;
+      variant: 'broadleaf' | 'cypress' | 'ornamental';
+      rot: number;
+    }> = [];
+    let seed = 88;
+    const nextRand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+
+    const roadAxes = [-78, -26, 26, 78];
+    const isNearRoad = (val: number) => roadAxes.some((a) => Math.abs(val - a) < 9.5);
+
+    for (const zBase of [-108, -124, 108, 124]) {
+      for (let x = -132; x <= 132; x += 16) {
+        if (isNearRoad(x)) continue;
+        const v = nextRand();
+        trees.push({
+          x: x + (nextRand() - 0.5) * 4,
+          z: zBase + (nextRand() - 0.5) * 5,
+          scale: 1.0 + nextRand() * 0.45,
+          variant: v < 0.55 ? 'broadleaf' : v < 0.8 ? 'cypress' : 'ornamental',
+          rot: nextRand() * Math.PI * 2,
+        });
+      }
+    }
+
+    for (const xBase of [-122, 122]) {
+      for (let z = -98; z <= 98; z += 16) {
+        if (isNearRoad(z)) continue;
+        const v = nextRand();
+        trees.push({
+          x: xBase + (nextRand() - 0.5) * 5,
+          z: z + (nextRand() - 0.5) * 4,
+          scale: 1.0 + nextRand() * 0.4,
+          variant: v < 0.5 ? 'broadleaf' : v < 0.8 ? 'cypress' : 'ornamental',
+          rot: nextRand() * Math.PI * 2,
+        });
+      }
+    }
+
+    return trees;
+  }, []);
+
+  return (
+    <group>
+      {/* Town Meadow Ground + Vast Rolling Open Countryside */}
+      <VastCountryside textures={textures} />
+
+      {/* Road Segments with Double Center Lines & Edge Markings */}
+      {ROAD_SEGMENTS.map((seg) => {
+        const dx = seg.end.x - seg.start.x;
+        const dz = seg.end.z - seg.start.z;
+        const length = Math.hypot(dx, dz);
+        const cx = (seg.start.x + seg.end.x) / 2;
+        const cz = (seg.start.z + seg.end.z) / 2;
+        const angle = Math.atan2(dx, dz);
+
+        return (
+          <group key={seg.id} position={[cx, 0, cz]} rotation={[0, angle, 0]}>
+            <mesh position={[0, ROAD_SURFACE_Y / 2, 0]} receiveShadow>
+              <boxGeometry args={[seg.width, ROAD_SURFACE_Y, length]} />
+              <meshStandardMaterial
+                map={textures.asphalt}
+                color={seg.isStubExtension ? '#414750' : '#363b43'}
+                roughness={0.84}
+                metalness={0.04}
+              />
+            </mesh>
+
+            {/* Outer Edge Road Lines */}
+            <mesh position={[-seg.width / 2 + 0.25, ROAD_SURFACE_Y + 0.006, 0]} material={roadEdgeMat}>
+              <boxGeometry args={[0.1, 0.005, length - 0.3]} />
+            </mesh>
+            <mesh position={[seg.width / 2 - 0.25, ROAD_SURFACE_Y + 0.006, 0]} material={roadEdgeMat}>
+              <boxGeometry args={[0.1, 0.005, length - 0.3]} />
+            </mesh>
+
+            {/* Double Center Lines on Main Boulevards */}
+            {seg.hasDoubleCenterLine && (
+              <>
+                <mesh position={[-0.14, ROAD_SURFACE_Y + 0.007, 0]} material={yellowLineMat}>
+                  <boxGeometry args={[0.11, 0.005, length - 0.6]} />
+                </mesh>
+                <mesh position={[0.14, ROAD_SURFACE_Y + 0.007, 0]} material={yellowLineMat}>
+                  <boxGeometry args={[0.11, 0.005, length - 0.6]} />
+                </mesh>
+              </>
+            )}
+          </group>
+        );
+      })}
+
+      {/* Instanced Center Dashed Road Markings */}
+      <instancedMesh
+        ref={dashMeshRef}
+        args={[undefined, undefined, dashTransforms.length]}
+        material={whiteMarkingMat}
+      >
+        <boxGeometry args={[0.12, 0.005, 1.9]} />
+      </instancedMesh>
+
+      {/* Instanced Zebra Crosswalks & Stop Bars */}
+      <instancedMesh
+        ref={crosswalkMeshRef}
+        args={[undefined, undefined, crosswalkTransforms.length]}
+        material={whiteMarkingMat}
+      >
+        <boxGeometry args={[1, 0.005, 1]} />
+      </instancedMesh>
+
+      {/* Intersections & Working Traffic Signals */}
+      {INTERSECTIONS.map((inter) => {
+        const halfW = inter.width / 2;
+        const halfD = inter.depth / 2;
+        return (
+          <group key={inter.id} position={[inter.center.x, 0, inter.center.z]}>
+            <mesh position={[0, ROAD_SURFACE_Y / 2 + 0.001, 0]} receiveShadow>
+              <boxGeometry args={[inter.width, ROAD_SURFACE_Y, inter.depth]} />
+              <meshStandardMaterial
+                map={textures.asphalt}
+                color="#353a42"
+                roughness={0.84}
+                metalness={0.04}
+                polygonOffset
+                polygonOffsetFactor={-1}
+              />
+            </mesh>
+
+            {inter.hasTrafficSignal && (
+              <>
+                <TrafficSignalPost
+                  position={[-halfW - 0.85, SIDEWALK_HEIGHT, -halfD - 0.85]}
+                  rotationY={0}
+                  axis="ns"
+                />
+                <TrafficSignalPost
+                  position={[halfW + 0.85, SIDEWALK_HEIGHT, halfD + 0.85]}
+                  rotationY={Math.PI}
+                  axis="ns"
+                />
+                <TrafficSignalPost
+                  position={[halfW + 0.85, SIDEWALK_HEIGHT, -halfD - 0.85]}
+                  rotationY={-Math.PI / 2}
+                  axis="ew"
+                />
+                <TrafficSignalPost
+                  position={[-halfW - 0.85, SIDEWALK_HEIGHT, halfD + 0.85]}
+                  rotationY={Math.PI / 2}
+                  axis="ew"
+                />
+              </>
+            )}
+          </group>
+        );
+      })}
+
+      {/* Grand Avenue Landscaped Roundabouts at (-26, 0) & (26, 0) */}
+      {ROUNDABOUT_CENTERS.map((rb) => (
+        <group key={rb.id} position={[rb.x, 0, rb.z]}>
+          {/* Outer Circular Asphalt Apron sits cleanly above passing road markings */}
+          <mesh position={[0, ROAD_SURFACE_Y + 0.012, 0]} receiveShadow>
+            <cylinderGeometry args={[7.4, 7.4, 0.022, 32]} />
+            <meshStandardMaterial
+              map={textures.asphalt}
+              color="#363b43"
+              roughness={0.84}
+              polygonOffset
+              polygonOffsetFactor={-4}
+            />
+          </mesh>
+          {/* Cobblestone Curbed Ring */}
+          <mesh position={[0, ROAD_SURFACE_Y + 0.052, 0]} receiveShadow>
+            <cylinderGeometry args={[3.55, 3.65, 0.08, 24]} />
+            <meshStandardMaterial map={textures.cobblestone} color="#c5bdb0" roughness={0.85} />
+          </mesh>
+          {/* Central Green Flower Island */}
+          <mesh position={[0, ROAD_SURFACE_Y + 0.15, 0]} receiveShadow>
+            <cylinderGeometry args={[2.55, 2.75, 0.22, 20]} />
+            <meshStandardMaterial map={textures.grass} color="#588746" roughness={0.9} />
+          </mesh>
+          <StylizedTree position={[0, ROAD_SURFACE_Y + 0.26, 0]} scale={0.9} variant="ornamental" />
+          <EuropeanRoadSign position={[-6.4, SIDEWALK_HEIGHT, -6.2]} rotationY={0} variant="yield" />
+          <EuropeanRoadSign position={[6.4, SIDEWALK_HEIGHT, 6.2]} rotationY={Math.PI} variant="yield" />
+        </group>
+      ))}
+
+      {/* Speed & District Road Signs */}
+      <EuropeanRoadSign position={[-32.0, SIDEWALK_HEIGHT, -32.0]} rotationY={0} variant="speed30" />
+      <EuropeanRoadSign position={[32.0, SIDEWALK_HEIGHT, 32.0]} rotationY={Math.PI} variant="speed30" />
+
+      {/* Raised Granite Sidewalks */}
+      {SIDEWALK_PADS.map((pad) => (
+        <mesh
+          key={pad.id}
+          position={[pad.x, SIDEWALK_HEIGHT / 2, pad.z]}
+          receiveShadow
+        >
+          <boxGeometry args={[pad.width, SIDEWALK_HEIGHT, pad.depth]} />
+          <meshStandardMaterial
+            map={textures.sidewalkStone}
+            color="#d8d2c6"
+            roughness={0.84}
+            metalness={0.02}
+          />
+        </mesh>
+      ))}
+
+      {/* European Streetlamps */}
+      {STREET_LAMPS.map((lamp) => (
+        <EuropeanStreetLamp
+          key={lamp.id}
+          position={[lamp.x, SIDEWALK_HEIGHT, lamp.z]}
+          rotationY={lamp.rotationY}
+          timeOfDay={timeOfDay}
+        />
+      ))}
+
+      {/* Dedicated Parked Cars in Commercial, Civic & Stadium Parking Bays */}
+      {PARKED_CARS.map((car) => (
+        <group key={car.id} position={[car.x, SIDEWALK_HEIGHT, car.z]} rotation={[0, car.rotY, 0]}>
+          <CarMesh color={car.color} style={car.style} timeOfDay={timeOfDay} />
+        </group>
+      ))}
+
+      {/* Perimeter Countryside Tree Groves (no shadow casting outside town shadow bounds) */}
+      {perimeterTrees.map((tree, i) => (
+        <StylizedTree
+          key={`ptree-${i}`}
+          position={[tree.x, 0, tree.z]}
+          scale={tree.scale}
+          variant={tree.variant}
+          rotationY={tree.rot}
+          castShadow={false}
+        />
+      ))}
+    </group>
+  );
+};

@@ -1,0 +1,294 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety-net deny-all baseline
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Hardened Global Helpers
+    // -------------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'shahzaibalix@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidPlotDoc(data, pathPlotId) {
+      return data.keys().hasAll([
+          'plotId',
+          'facingAngle',
+          'ownershipStatus',
+          'ownerUid',
+          'ownerUsername',
+          'verificationState',
+          'claimedAt',
+          'upgradeLevel',
+          'houseArchetype',
+          'hasGarageCarport',
+          'hasPool',
+          'hasBalcony',
+          'businessCategory',
+          'businessName',
+          'businessOwnerUsername',
+          'businessStatus',
+          'businessLevel',
+          'businessDailyRevenue',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'plotId',
+          'facingAngle',
+          'ownershipStatus',
+          'ownerUid',
+          'ownerUsername',
+          'verificationState',
+          'claimedAt',
+          'upgradeLevel',
+          'houseArchetype',
+          'hasGarageCarport',
+          'hasPool',
+          'hasBalcony',
+          'businessCategory',
+          'businessName',
+          'businessOwnerUsername',
+          'businessStatus',
+          'businessLevel',
+          'businessDailyRevenue',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.plotId is string && data.plotId == pathPlotId && data.plotId.size() <= 64 &&
+        data.facingAngle is number &&
+        data.ownershipStatus in ['occupied', 'available', 'reserved', 'civic'] &&
+        data.ownerUid is string && data.ownerUid.size() <= 128 &&
+        data.ownerUsername is string && data.ownerUsername.size() <= 24 &&
+        data.verificationState in ['unverified-local', 'pending-oauth', 'verified-community', 'none'] &&
+        data.claimedAt is string && data.claimedAt.size() <= 20 &&
+        data.upgradeLevel is int && data.upgradeLevel >= 1 && data.upgradeLevel <= 3 &&
+        data.houseArchetype is string && data.houseArchetype.size() <= 24 &&
+        data.hasGarageCarport is bool &&
+        data.hasPool is bool &&
+        data.hasBalcony is bool &&
+        data.businessCategory is string && data.businessCategory.size() <= 24 &&
+        data.businessName is string && data.businessName.size() <= 48 &&
+        data.businessOwnerUsername is string && data.businessOwnerUsername.size() <= 24 &&
+        data.businessStatus in ['open', 'upgrading', 'available', 'none'] &&
+        data.businessLevel is int && data.businessLevel >= 1 && data.businessLevel <= 3 &&
+        data.businessDailyRevenue is int && data.businessDailyRevenue >= 0 && data.businessDailyRevenue <= 50000 &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTownEconomy(data) {
+      return data.keys().hasAll(['treasuryBalance', 'lastCollectedByUid', 'updatedAt']) &&
+        data.keys().hasOnly(['treasuryBalance', 'lastCollectedByUid', 'updatedAt']) &&
+        data.treasuryBalance is int && data.treasuryBalance >= 0 && data.treasuryBalance <= 100000000 &&
+        data.lastCollectedByUid is string && data.lastCollectedByUid.size() >= 1 && data.lastCollectedByUid.size() <= 128 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTownSettings(data) {
+      return data.keys().hasAll([
+          'welcomeTitle',
+          'welcomeSubtitle',
+          'instagramUrl',
+          'instagramInstruction',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'welcomeTitle',
+          'welcomeSubtitle',
+          'instagramUrl',
+          'instagramInstruction',
+          'updatedByUid',
+          'updatedAt'
+        ]) &&
+        data.welcomeTitle is string && data.welcomeTitle.size() >= 1 && data.welcomeTitle.size() <= 80 &&
+        data.welcomeSubtitle is string && data.welcomeSubtitle.size() >= 1 && data.welcomeSubtitle.size() <= 260 &&
+        data.instagramUrl is string && data.instagramUrl.size() >= 10 && data.instagramUrl.size() <= 200 && data.instagramUrl.matches('^https://.*$') &&
+        data.instagramInstruction is string && data.instagramInstruction.size() >= 1 && data.instagramInstruction.size() <= 280 &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidResidentRecord(data, pathPlotId) {
+      return data.keys().hasAll([
+          'plotId',
+          'inGameUsername',
+          'instagramHandle',
+          'notes',
+          'approvedByUid',
+          'approvedAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'plotId',
+          'inGameUsername',
+          'instagramHandle',
+          'notes',
+          'approvedByUid',
+          'approvedAt',
+          'updatedAt'
+        ]) &&
+        data.plotId is string && data.plotId == pathPlotId && data.plotId.size() <= 64 &&
+        data.inGameUsername is string && data.inGameUsername.size() >= 1 && data.inGameUsername.size() <= 24 &&
+        data.instagramHandle is string && data.instagramHandle.size() >= 1 && data.instagramHandle.size() <= 40 &&
+        data.notes is string && data.notes.size() <= 200 &&
+        data.approvedByUid is string && data.approvedByUid.size() >= 1 && data.approvedByUid.size() <= 128 &&
+        data.approvedAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidResidentUsernameLock(data, pathUsernameKey) {
+      return data.keys().hasAll(['usernameKey', 'plotId', 'updatedByUid', 'updatedAt']) &&
+        data.keys().hasOnly(['usernameKey', 'plotId', 'updatedByUid', 'updatedAt']) &&
+        isValidId(data.usernameKey) &&
+        data.usernameKey == pathUsernameKey &&
+        isValidId(data.plotId) &&
+        data.plotId.size() <= 64 &&
+        data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminEntry(data, pathUid) {
+      return data.keys().hasAll(['uid', 'grantedAt']) &&
+        data.keys().hasOnly(['uid', 'grantedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == pathUid &&
+        data.grantedAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // Collection Rules
+    // -------------------------------------------------------------------------
+
+    // Public Town Plots: Public visitors can read only; ONLY Super Admin can write.
+    match /town_plots/{plotId} {
+      allow get: if isValidId(plotId);
+      allow list: if true;
+      allow create: if isAdmin() &&
+        isValidId(plotId) &&
+        isValidPlotDoc(incoming(), plotId) &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(plotId) &&
+        isValidPlotDoc(incoming(), plotId) &&
+        incoming().plotId == existing().plotId &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(plotId);
+    }
+
+    // Public Town Metadata (`economy`, `settings`): Public read; ONLY Super Admin can write.
+    match /town_meta/{docId} {
+      allow get: if isValidId(docId) && docId in ['economy', 'settings'];
+      allow list: if false;
+      allow create, update: if isAdmin() &&
+        isValidId(docId) &&
+        (
+          (
+            docId == 'economy' &&
+            isValidTownEconomy(incoming()) &&
+            incoming().lastCollectedByUid == request.auth.uid &&
+            incoming().updatedAt == request.time
+          ) ||
+          (
+            docId == 'settings' &&
+            isValidTownSettings(incoming()) &&
+            incoming().updatedByUid == request.auth.uid &&
+            incoming().updatedAt == request.time
+          )
+        );
+      allow delete: if false;
+    }
+
+    // Private Resident Records (Instagram handles & review notes): Strictly Super Admin ONLY.
+    match /resident_records/{plotId} {
+      allow get: if isAdmin() && isValidId(plotId);
+      allow list: if isAdmin();
+      allow create: if isAdmin() &&
+        isValidId(plotId) &&
+        isValidResidentRecord(incoming(), plotId) &&
+        incoming().approvedByUid == request.auth.uid &&
+        incoming().approvedAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isAdmin() &&
+        isValidId(plotId) &&
+        isValidResidentRecord(incoming(), plotId) &&
+        incoming().plotId == existing().plotId &&
+        incoming().approvedAt == existing().approvedAt &&
+        incoming().approvedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(plotId);
+    }
+
+    // Duplicate Resident Username Guard: Strictly Super Admin ONLY.
+    match /resident_usernames/{usernameKey} {
+      allow get: if isAdmin() && isValidId(usernameKey);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() &&
+        isValidId(usernameKey) &&
+        isValidResidentUsernameLock(incoming(), usernameKey) &&
+        incoming().updatedByUid == request.auth.uid &&
+        incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(usernameKey);
+    }
+
+    // Admin Authorization Roster (Zero self-promotion)
+    match /admins/{adminUid} {
+      allow get: if isVerifiedUser() && isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() &&
+        isValidId(adminUid) &&
+        isValidAdminEntry(incoming(), adminUid) &&
+        incoming().grantedAt == request.time;
+      allow delete: if isAdmin() && isValidId(adminUid);
+    }
+
+    // Backend Authoritative Admin Verification Gate (no client-side role secrets)
+    match /admin_gate/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list, create, update, delete: if false;
+    }
+
+    // Boot Connection Check Endpoint
+    match /test/{docId} {
+      allow get: if isValidId(docId);
+      allow list, create, update, delete: if false;
+    }
+  }
+}
